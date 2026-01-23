@@ -1,6 +1,0 @@
-streamlit
-yfinance
-hmmlearn
-numpy
-pandas
-streamlit-autorefresh
