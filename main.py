@@ -6,7 +6,7 @@ import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
 # Configuración de la página
-st.set_page_config(page_title="Simons-Arg ADRs", page_icon="🦅")
+st.set_page_config(page_title="Simons-Arg Pro", page_icon="🦅")
 
 st.title("🦅 Monitor Simons-Arg")
 st.write("Seguimiento de CEDEARs y ADRs Argentinos")
@@ -23,12 +23,12 @@ def procesar_datos():
     
     for t, ratio in cedears.items():
         try:
-            # Data USA
+            # Datos USA
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
             if u.empty: continue
             val_usa = float(u['Close'].values.flatten()[-1])
             
-            # Data Argentina
+            # Datos Argentina
             a = yf.download(t + ".BA", period="2d", interval="1m", progress=False, auto_adjust=True)
             if not a.empty:
                 val_arg = float(a['Close'].values.flatten()[-1])
@@ -43,12 +43,16 @@ def procesar_datos():
                 rets = np.diff(np.log(h['Close'].values.flatten().reshape(-1, 1)), axis=0)
                 model = GaussianHMM(n_components=3, random_state=42).fit(rets)
                 estado = model.predict(rets)[-1]
-                # LINEA CORREGIDA ABAJO:
                 clima = "🟢" if estado == 0 else "🟡" if estado == 1 else "🔴"
             else:
                 clima = "⚪"
             
-            filas.append({"Activo": t, "Precio USD": round(val_usa, 2), "CCL": round(ccl, 2), "Clima": clima})
+            filas.append({
+                "Activo": t, 
+                "Precio USD": round(val_usa, 2), 
+                "CCL": round(ccl, 2), 
+                "Clima": clima
+            })
         except:
             continue
             
@@ -57,8 +61,9 @@ def procesar_datos():
     if not df.empty:
         ccl_ref = df['CCL'].median()
         def definir_senal(row):
-            if row['CCL'] < ccl_ref * 0.99: return "🐂 COMPRA"
-            if row['CCL'] > ccl_ref * 1.01: return "🐻 VENTA"
+            # Lógica de señales con Toros Verdes y Osos Rojos
+            if row['CCL'] < ccl_ref * 0.99: return "🟢🐂 COMPRA"
+            if row['CCL'] > ccl_ref * 1.01: return "🔴 Bear VENTA"
             return "⚖️ MANTENER"
         df['Señal'] = df.apply(definir_senal, axis=1)
         return df, ccl_ref
@@ -68,11 +73,15 @@ def procesar_datos():
 if st.button('Actualizar Ahora'):
     st.rerun()
 
-with st.spinner('Calculando Toros y Osos...'):
+with st.spinner('Analizando Toros y Osos...'):
     data, ccl_avg = procesar_datos()
 
 if not data.empty:
     st.metric("CCL Promedio", f"${ccl_avg:,.2f}")
-    st.dataframe(data, use_container_width=True, hide_index=True)
+    
+    # Ajuste para ver todas las filas a la vez (height calculado)
+    # 35 píxeles por fila aproximadamente + encabezado
+    altura_tabla = (len(data) + 1) * 38 
+    st.dataframe(data, use_container_width=True, hide_index=True, height=altura_tabla)
 
 st_autorefresh(interval=900000, key="datarefresh")
