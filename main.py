@@ -11,10 +11,10 @@ st.set_page_config(page_title="Simons-Arg Pro", page_icon="🦅")
 st.title("🦅 Monitor Simons-Arg")
 st.write("Seguimiento de CEDEARs y ADRs Argentinos")
 
-# DICCIONARIO CORREGIDO (Ratios ADR vs Local)
+# DICCIONARIO CON RATIOS CALIBRADOS
 cedears = {
-    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, # CEDEARs
-    'GGAL': 10, 'YPF': 1,  'PAM': 25, 'BMA': 10, 'CEPU': 10, 'VIST': 1  # ADRs Corregidos
+    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120,
+    'GGAL': 10, 'YPF': 1,  'PAM': 25, 'BMA': 10, 'CEPU': 10, 'VIST': 0.2
 }
 
 def procesar_datos():
@@ -23,19 +23,20 @@ def procesar_datos():
     
     for t, ratio in cedears.items():
         try:
-            # Datos USA
-            u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
-            if u.empty: continue
-            val_usa = float(u['Close'].values.flatten()[-1])
+            # Forzamos la descarga para evitar el "None"
+            u = yf.download(t, period="5d", interval="1m", progress=False, auto_adjust=True)
+            a = yf.download(t + ".BA", period="5d", interval="1m", progress=False, auto_adjust=True)
             
-            # Datos Argentina
-            a = yf.download(t + ".BA", period="2d", interval="1m", progress=False, auto_adjust=True)
-            if not a.empty:
-                val_arg = float(a['Close'].values.flatten()[-1])
-                ccl = (val_arg * ratio) / val_usa
-                lista_ccl.append(ccl)
-            else:
-                ccl = np.nan
+            if u.empty or a.empty: continue
+            
+            val_usa = float(u['Close'].iloc[-1])
+            val_arg = float(a['Close'].iloc[-1])
+            ccl = (val_arg * ratio) / val_usa
+            
+            # Filtro de seguridad para CCLs fallidos
+            if ccl < 500 or ccl > 3000: continue
+            
+            lista_ccl.append(ccl)
 
             # Clima (HMM)
             h = yf.download(t, period="3mo", interval="1d", progress=False)
@@ -47,40 +48,35 @@ def procesar_datos():
             else:
                 clima = "⚪"
             
-            filas.append({
-                "Activo": t, 
-                "Precio USD": round(val_usa, 2), 
-                "CCL": round(ccl, 2), 
-                "Clima": clima
-            })
+            filas.append({"Activo": t, "Precio USD": round(val_usa, 2), "CCL": round(ccl, 2), "Clima": clima})
         except:
             continue
             
     df = pd.DataFrame(filas)
     
     if not df.empty:
-        ccl_ref = df['CCL'].median()
+        ccl_ref = np.median(lista_ccl)
         def definir_senal(row):
-            # Lógica de señales con Toros Verdes y Osos Rojos
-            if row['CCL'] < ccl_ref * 0.99: return "🟢🐂 COMPRA"
-            if row['CCL'] > ccl_ref * 1.01: return "🔴🐻 VENTA"
+            # Lógica visual de Toros Verdes y Osos Rojos
+            if row['CCL'] < ccl_ref * 0.995: return "🟢🐂 COMPRA"
+            if row['CCL'] > ccl_ref * 1.005: return "🔴🐻 VENTA"
             return "⚖️ MANTENER"
         df['Señal'] = df.apply(definir_senal, axis=1)
         return df, ccl_ref
     return df, 0
 
-# Botón y Proceso
+# Interfaz
 if st.button('Actualizar Ahora'):
     st.rerun()
 
-with st.spinner('Analizando Toros y Osos...'):
+with st.spinner('Calibrando ratios y señales...'):
     data, ccl_avg = procesar_datos()
 
 if not data.empty:
     st.metric("CCL Promedio", f"${ccl_avg:,.2f}")
     
-    # Altura dinámica para ver todas las filas
-    altura_tabla = (len(data) + 1) * 38 
-    st.dataframe(data, use_container_width=True, hide_index=True, height=altura_tabla)
+    # Altura automática para ver las 11 filas sin scrollear
+    altura_total = (len(data) + 1) * 39
+    st.dataframe(data, use_container_width=True, hide_index=True, height=altura_total)
 
 st_autorefresh(interval=900000, key="datarefresh")
