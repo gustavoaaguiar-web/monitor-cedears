@@ -9,7 +9,7 @@ st.set_page_config(page_title="Simons-Arg Pro", page_icon="🦅")
 st.title("🦅 Monitor Simons-Arg")
 st.write("Seguimiento de CEDEARs y ADRs Argentinos")
 
-# DICCIONARIO CON RATIOS Y SÍMBOLOS ALTERNATIVOS
+# CONFIGURACIÓN SIN CCL PARA VIST
 activos_config = {
     'AAPL': {'ratio': 20, 'ba': 'AAPL.BA'},
     'TSLA': {'ratio': 15, 'ba': 'TSLA.BA'},
@@ -17,11 +17,11 @@ activos_config = {
     'MSFT': {'ratio': 30, 'ba': 'MSFT.BA'},
     'MELI': {'ratio': 120, 'ba': 'MELI.BA'},
     'GGAL': {'ratio': 10, 'ba': 'GGAL.BA'},
-    'YPF':  {'ratio': 1,  'ba': 'YPFD.BA'}, # Símbolo corregido para YPF
-    'PAM':  {'ratio': 25, 'ba': 'PAMP.BA'}, # Símbolo corregido para Pampa
+    'YPF':  {'ratio': 1,  'ba': 'YPFD.BA'},
+    'PAM':  {'ratio': 25, 'ba': 'PAMP.BA'},
     'BMA':  {'ratio': 10, 'ba': 'BMA.BA'},
     'CEPU': {'ratio': 10, 'ba': 'CEPU.BA'},
-    'VIST': {'ratio': 0.2, 'ba': 'VIST.BA'}
+    'VIST': {'ratio': None, 'ba': None} # VIST solo USA
 }
 
 def procesar_datos():
@@ -30,25 +30,21 @@ def procesar_datos():
     
     for t, config in activos_config.items():
         try:
-            # 1. Data USA
+            # 1. Data USA (Siempre necesaria)
             u = yf.download(t, period="5d", interval="1m", progress=False, auto_adjust=True)
             if u.empty: continue
             val_usa = float(u['Close'].iloc[-1])
             
-            # 2. Data Argentina (con reintento)
-            a = yf.download(config['ba'], period="5d", interval="1m", progress=False, auto_adjust=True)
-            
-            if a.empty: # Si falla el principal, intentamos con el ticker básico
-                a = yf.download(t + ".BA", period="5d", interval="1m", progress=False, auto_adjust=True)
-            
-            if not a.empty:
-                val_arg = float(a['Close'].iloc[-1])
-                ccl = (val_arg * config['ratio']) / val_usa
-                lista_ccl.append(ccl)
-            else:
-                ccl = np.nan
+            ccl = np.nan
+            # 2. Data Argentina (Solo si tiene configuración .BA)
+            if config['ba']:
+                a = yf.download(config['ba'], period="5d", interval="1m", progress=False, auto_adjust=True)
+                if not a.empty:
+                    val_arg = float(a['Close'].iloc[-1])
+                    ccl = (val_arg * config['ratio']) / val_usa
+                    lista_ccl.append(ccl)
 
-            # 3. Clima (HMM)
+            # 3. Clima (HMM) - Siempre se calcula para todos
             h = yf.download(t, period="3mo", interval="1d", progress=False)
             clima = "⚪"
             if not h.empty and len(h) > 10:
@@ -57,17 +53,18 @@ def procesar_datos():
                 estado = model.predict(rets)[-1]
                 clima = "🟢" if estado == 0 else "🟡" if estado == 1 else "🔴"
             
-            filas.append({"Activo": t, "Precio USD": round(val_usa, 2), "CCL": round(ccl, 2), "Clima": clima})
+            filas.append({"Activo": t, "Precio USD": round(val_usa, 2), "CCL": round(ccl, 2) if not np.isnan(ccl) else "N/A", "Clima": clima})
         except:
             continue
             
     df = pd.DataFrame(filas)
     if not df.empty:
-        ccl_ref = np.median([x for x in lista_ccl if not np.isnan(x)])
+        ccl_ref = np.median(lista_ccl) if lista_ccl else 0
         def definir_senal(row):
-            if np.isnan(row['CCL']): return "⚖️ MANTENER"
-            if row['CCL'] < ccl_ref * 0.995: return "🟢🐂 COMPRA"
-            if row['CCL'] > ccl_ref * 1.005: return "🔴🐻 VENTA"
+            if row['CCL'] == "N/A": return "⚖️ MANTENER"
+            val_ccl = float(row['CCL'])
+            if val_ccl < ccl_ref * 0.995: return "🟢🐂 COMPRA"
+            if val_ccl > ccl_ref * 1.005: return "🔴🐻 VENTA"
             return "⚖️ MANTENER"
         df['Señal'] = df.apply(definir_senal, axis=1)
         return df, ccl_ref
@@ -76,11 +73,11 @@ def procesar_datos():
 if st.button('Actualizar Ahora'):
     st.rerun()
 
-with st.spinner('Buscando a YPF y Pampa...'):
+with st.spinner('Limpiando datos de VIST...'):
     data, ccl_avg = procesar_datos()
 
 if not data.empty:
-    st.metric("CCL Promedio", f"${ccl_avg:,.2f}")
+    st.metric("CCL Promedio (Panel)", f"${ccl_avg:,.2f}")
     altura_total = (len(data) + 1) * 39
     st.dataframe(data, use_container_width=True, hide_index=True, height=altura_total)
 
