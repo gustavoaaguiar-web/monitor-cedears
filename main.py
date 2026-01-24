@@ -5,60 +5,67 @@ import numpy as np
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# Configuración de la página
 st.set_page_config(page_title="Simons-Arg Pro", page_icon="🦅")
-
 st.title("🦅 Monitor Simons-Arg")
 st.write("Seguimiento de CEDEARs y ADRs Argentinos")
 
-# DICCIONARIO CALIBRADO
-cedears = {
-    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120,
-    'GGAL': 10, 'YPF': 1,  'PAM': 25, 'BMA': 10, 'CEPU': 10, 'VIST': 0.2
+# DICCIONARIO CON RATIOS Y SÍMBOLOS ALTERNATIVOS
+activos_config = {
+    'AAPL': {'ratio': 20, 'ba': 'AAPL.BA'},
+    'TSLA': {'ratio': 15, 'ba': 'TSLA.BA'},
+    'NVDA': {'ratio': 24, 'ba': 'NVDA.BA'},
+    'MSFT': {'ratio': 30, 'ba': 'MSFT.BA'},
+    'MELI': {'ratio': 120, 'ba': 'MELI.BA'},
+    'GGAL': {'ratio': 10, 'ba': 'GGAL.BA'},
+    'YPF':  {'ratio': 1,  'ba': 'YPFD.BA'}, # Símbolo corregido para YPF
+    'PAM':  {'ratio': 25, 'ba': 'PAMP.BA'}, # Símbolo corregido para Pampa
+    'BMA':  {'ratio': 10, 'ba': 'BMA.BA'},
+    'CEPU': {'ratio': 10, 'ba': 'CEPU.BA'},
+    'VIST': {'ratio': 0.2, 'ba': 'VIST.BA'}
 }
 
 def procesar_datos():
     filas = []
     lista_ccl = []
     
-    for t, ratio in cedears.items():
+    for t, config in activos_config.items():
         try:
-            # Descarga con más margen (5 días) para asegurar que no de None
+            # 1. Data USA
             u = yf.download(t, period="5d", interval="1m", progress=False, auto_adjust=True)
-            a = yf.download(t + ".BA", period="5d", interval="1m", progress=False, auto_adjust=True)
-            
-            if u.empty or a.empty: continue
-            
+            if u.empty: continue
             val_usa = float(u['Close'].iloc[-1])
-            val_arg = float(a['Close'].iloc[-1])
-            ccl = (val_arg * ratio) / val_usa
-            lista_ccl.append(ccl)
+            
+            # 2. Data Argentina (con reintento)
+            a = yf.download(config['ba'], period="5d", interval="1m", progress=False, auto_adjust=True)
+            
+            if a.empty: # Si falla el principal, intentamos con el ticker básico
+                a = yf.download(t + ".BA", period="5d", interval="1m", progress=False, auto_adjust=True)
+            
+            if not a.empty:
+                val_arg = float(a['Close'].iloc[-1])
+                ccl = (val_arg * config['ratio']) / val_usa
+                lista_ccl.append(ccl)
+            else:
+                ccl = np.nan
 
-            # Clima (HMM)
+            # 3. Clima (HMM)
             h = yf.download(t, period="3mo", interval="1d", progress=False)
+            clima = "⚪"
             if not h.empty and len(h) > 10:
                 rets = np.diff(np.log(h['Close'].values.flatten().reshape(-1, 1)), axis=0)
                 model = GaussianHMM(n_components=3, random_state=42).fit(rets)
                 estado = model.predict(rets)[-1]
                 clima = "🟢" if estado == 0 else "🟡" if estado == 1 else "🔴"
-            else:
-                clima = "⚪"
             
-            filas.append({
-                "Activo": t, 
-                "Precio USD": round(val_usa, 2), 
-                "CCL": round(ccl, 2), 
-                "Clima": clima
-            })
+            filas.append({"Activo": t, "Precio USD": round(val_usa, 2), "CCL": round(ccl, 2), "Clima": clima})
         except:
             continue
             
     df = pd.DataFrame(filas)
-    
     if not df.empty:
-        ccl_ref = np.median(lista_ccl)
+        ccl_ref = np.median([x for x in lista_ccl if not np.isnan(x)])
         def definir_senal(row):
-            # Toro Verde y Oso Rojo con emojis de colores
+            if np.isnan(row['CCL']): return "⚖️ MANTENER"
             if row['CCL'] < ccl_ref * 0.995: return "🟢🐂 COMPRA"
             if row['CCL'] > ccl_ref * 1.005: return "🔴🐻 VENTA"
             return "⚖️ MANTENER"
@@ -66,18 +73,15 @@ def procesar_datos():
         return df, ccl_ref
     return df, 0
 
-# Interfaz
 if st.button('Actualizar Ahora'):
     st.rerun()
 
-with st.spinner('Cargando panel completo...'):
+with st.spinner('Buscando a YPF y Pampa...'):
     data, ccl_avg = procesar_datos()
 
 if not data.empty:
     st.metric("CCL Promedio", f"${ccl_avg:,.2f}")
-    
-    # Altura para ver las 11 filas de una
-    altura_total = (len(data) + 1) * 40
+    altura_total = (len(data) + 1) * 39
     st.dataframe(data, use_container_width=True, hide_index=True, height=altura_total)
 
 st_autorefresh(interval=900000, key="datarefresh")
