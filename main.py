@@ -11,10 +11,10 @@ st.set_page_config(page_title="Simons-Arg Pro", page_icon="🦅")
 st.title("🦅 Monitor Simons-Arg")
 st.write("Seguimiento de CEDEARs y ADRs Argentinos")
 
-# Diccionario con Ratios Actualizados
+# DICCIONARIO CORREGIDO (Ratios ADR vs Local)
 cedears = {
-    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120,
-    'GGAL': 10, 'YPF': 2, 'PAM': 25, 'BMA': 10, 'CEPU': 10, 'VIST': 1
+    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, # CEDEARs
+    'GGAL': 10, 'YPF': 1,  'PAM': 25, 'BMA': 10, 'CEPU': 10, 'VIST': 1  # ADRs Corregidos
 }
 
 def procesar_datos():
@@ -63,7 +63,7 @@ def procesar_datos():
         def definir_senal(row):
             # Lógica de señales con Toros Verdes y Osos Rojos
             if row['CCL'] < ccl_ref * 0.99: return "🟢🐂 COMPRA"
-            if row['CCL'] > ccl_ref * 1.01: return "🔴 Bear VENTA"
+            if row['CCL'] > ccl_ref * 1.01: return "🔴🐻 VENTA"
             return "⚖️ MANTENER"
         df['Señal'] = df.apply(definir_senal, axis=1)
         return df, ccl_ref
@@ -79,8 +79,7 @@ with st.spinner('Analizando Toros y Osos...'):
 if not data.empty:
     st.metric("CCL Promedio", f"${ccl_avg:,.2f}")
     
-    # Ajuste para ver todas las filas a la vez (height calculado)
-    # 35 píxeles por fila aproximadamente + encabezado
+    # Altura dinámica para ver todas las filas
     altura_tabla = (len(data) + 1) * 38 
     st.dataframe(data, use_container_width=True, hide_index=True, height=altura_tabla)
 
