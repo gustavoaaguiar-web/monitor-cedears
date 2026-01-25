@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 import json, os, requests
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE ALERTAS (DATOS VINCULADOS) ---
+# --- CONFIGURACIÓN DE ALERTAS ---
 TELEGRAM_TOKEN = "8519211806:AAFv54n320-ERA2a8eOjqgzQ4IjFnDFpvLY"
 TELEGRAM_CHAT_ID = "7338654543"
 
@@ -33,10 +33,10 @@ if 'init' not in st.session_state:
     d = cargar()
     st.session_state.update({'saldo': d["s"], 'pos': d["p"], 'hist': d["h"], 'init': True})
 
-v_i = sum(i['m'] for i in st.session_state.pos.values())
+v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
-st.title("🦅 Simons-Arg Pro + Alertas")
+st.title("🦅 Simons-Arg Pro")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/10000000.0)-1)*100:+.2f}%")
 c2.metric("Efectivo Disponible", f"AR$ {st.session_state.saldo:,.2f}")
@@ -59,7 +59,7 @@ def obtener_datos():
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
             ccls.append(ccl)
-            # Modelo de Clima
+            
             h = yf.download(t, period="3mo", interval="1d", progress=False)
             cl = "⚪"
             if not h.empty and len(h)>10:
@@ -72,42 +72,10 @@ def obtener_datos():
 if st.button('🔄 Forzar Actualización'): st.rerun()
 df, avg_ccl = obtener_datos()
 
-# --- LÓGICA DE TRADING Y ALERTAS ---
+# --- LÓGICA DE TRADING Y COLUMNA SEÑAL ---
 if not df.empty:
     st.metric("📊 CCL Promedio del Mercado", f"AR$ {avg_ccl:,.2f}")
     
-    upd = False
-    for _, r in df.iterrows():
-        tk = r['Activo']
-        ccl_val = r['CCL']
-        # Definición de señales
-        es_compra = ccl_val < (avg_ccl * 0.995) and r['Clima'] != "🔴"
-        es_venta = ccl_val > (avg_ccl * 1.005)
-        
-        if es_compra and st.session_state.saldo >= 500000 and tk not in st.session_state.pos:
-            st.session_state.saldo -= 500000
-            st.session_state.pos[tk] = {"m": 500000, "pc": r['Precio ARS']}
-            enviar_alerta(f"🟢 COMPRA: {tk} a ${r['Precio ARS']:,.2f} (CCL: ${ccl_val:,.2f})")
-            upd = True
-        elif es_venta and tk in st.session_state.pos:
-            p = st.session_state.pos.pop(tk)
-            st.session_state.saldo += p['m'] * (r['Precio ARS'] / p['pc'])
-            enviar_alerta(f"🔴 VENTA: {tk} a ${r['Precio ARS']:,.2f}. CCL caro!")
-            upd = True
-            
-    if upd:
-        with open(DB, "w") as f:
-            json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
-
-    st.subheader("🏢 Posiciones Actuales")
-    if st.session_state.pos:
-        pos_df = []
-        for t, p in st.session_state.pos.items():
-            act = df[df.Activo==t].iloc[0]['Precio ARS'] if t in df.Activo.values else p['pc']
-            pos_df.append({"Activo":t, "Invertido":f"${p['m']:,.0f}", "Var":f"{((act/p['pc'])-1)*100:+.2f}%"})
-        st.table(pd.DataFrame(pos_df))
-
-    st.subheader("📊 Monitor de Mercado")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-st_autorefresh(interval=600000, key="bot_final")
+    # AGREGAMOS LA COLUMNA SEÑAL AL DATAFRAME AQUÍ
+    def definir_senal(r):
+        if r['CCL'] < (avg_
