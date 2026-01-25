@@ -6,7 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 import json, os, requests
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE ALERTAS ---
+# --- CONFIGURACIÓN ---
 TOKEN = "8519211806:AAFv54n320-ERA2a8eOjqgzQ4IjFnDFpvLY"
 CHAT_ID = "7338654543"
 
@@ -18,7 +18,7 @@ def enviar_alerta(msj):
         pass
 
 # --- PERSISTENCIA ---
-DB = "estado_simons_v17.json"
+DB = "estado_simons_v18.json"
 def cargar():
     if os.path.exists(DB):
         try:
@@ -41,7 +41,7 @@ c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital Inicial", "AR$ 10,000,000.00")
 
-# --- MERCADO (Línea 51 corregida) ---
+# --- MERCADO ---
 cfg = {'AAPL':20,'TSLA':15,'NVDA':24,'MSFT':30,'MELI':120,'GGAL':10,'YPF':1,'PAM':25,'BMA':10,'CEPU':10}
 
 def obtener_datos():
@@ -57,23 +57,7 @@ def obtener_datos():
             ccl = (pa * r) / pu
             ccls.append(ccl)
             
-            # Clima basado en tendencia diaria
             hist = yf.download(t, period="5d", progress=False)
             clima = "🟢" if hist.Close.iloc[-1] > hist.Close.iloc[0] else "🔴"
             
-            filas.append({"Activo": t, "Precio USD": pu, "Precio ARS": pa, "CCL": ccl, "Clima": clima})
-        except: continue
-    return pd.DataFrame(filas), np.median(ccls) if ccls else 0
-
-df, avg_ccl = obtener_datos()
-
-# --- LÓGICA DE SEÑALES ---
-if not df.empty:
-    st.metric("📊 CCL Promedio", f"AR$ {avg_ccl:,.2f}")
-    
-    # Definimos la columna de señal explícitamente
-    def calcular_senal(row):
-        ccl_actual = row['CCL']
-        if ccl_actual < (avg_ccl * 0.995) and row['Clima'] == "🟢":
-            return "🟢 COMPRA"
-        if ccl_actual > (avg_ccl * 1.005):
+            filas.append({"Act
