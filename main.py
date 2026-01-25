@@ -18,7 +18,7 @@ def enviar_alerta(msj):
         pass
 
 # --- PERSISTENCIA ---
-DB = "estado_simons_v19.json"
+DB = "estado_simons_v20.json"
 def cargar():
     if os.path.exists(DB):
         try:
@@ -48,37 +48,40 @@ def obtener_datos():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            u = yf.download(t, period="1d", interval="1m", progress=False)
+            # Descarga simplificada para evitar bloqueos
+            u = yf.download(t, period="1d", interval="5m", progress=False)
             ba = f"{t if t!='YPF' else 'YPFD'}.BA"
-            a = yf.download(ba, period="1d", interval="1m", progress=False)
+            a = yf.download(ba, period="1d", interval="5m", progress=False)
+            
             if u.empty or a.empty: continue
             
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl_i = (pa * r) / pu
             ccls.append(ccl_i)
             
-            h_clima = yf.download(t, period="5d", progress=False)
-            clima_v = "🟢" if h_clima.Close.iloc[-1] > h_clima.Close.iloc[0] else "🔴"
+            # Clima basado en los últimos 30 min (Simple y rápido)
+            clima_v = "🟢" if u.Close.iloc[-1] > u.Open.iloc[0] else "🔴"
             
-            filas.append({"Activo": t, "Precio USD": pu, "Precio ARS": pa, "CCL": ccl_i, "Clima": clima_v})
+            filas.append({
+                "Activo": t, 
+                "Precio USD": round(pu, 2), 
+                "Precio ARS": round(pa, 2), 
+                "CCL": round(ccl_i, 2), 
+                "Clima": clima_v
+            })
         except:
             continue
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
-df, avg_ccl = obtener_datos()
+with st.spinner('Actualizando Monitor de Mercado...'):
+    df, avg_ccl = obtener_datos()
 
 # --- SEÑALES Y TRADING ---
 if not df.empty:
     st.metric("📊 CCL Promedio", f"AR$ {avg_ccl:,.2f}")
     
-    def calc_senal(row):
-        if row['CCL'] < (avg_ccl * 0.995) and row['Clima'] == "🟢":
-            return "🟢 COMPRA"
-        if row['CCL'] > (avg_ccl * 1.005):
-            return "🔴 VENTA"
-        return "⚖️ MANTENER"
-
-    df['Señal'] = df.apply(calc_senal, axis=1)
+    # Columna Señal integrada directamente
+    df['Señal'] = df.apply(lambda r: "🟢 COMPRA" if r['CCL'] < (avg_ccl * 0.995) and r['Clima'] == "🟢" else ("🔴 VENTA" if r['CCL'] > (avg_ccl * 1.005) else "⚖️ MANTENER"), axis=1)
     
     upd = False
     for _, r in df.iterrows():
@@ -104,5 +107,7 @@ if not df.empty:
     st.subheader("🏢 Posiciones")
     if st.session_state.pos:
         st.table(pd.DataFrame([{"Activo":k, "Monto":f"${v['m']:,.0f}"} for k,v in st.session_state.pos.items()]))
+else:
+    st.warning("⚠️ No hay datos disponibles en este momento. Verificá la conexión con Yahoo Finance.")
 
-st_autorefresh(interval=600000, key="v19_final")
+st_autorefresh(interval=600000, key="v20_definitiva")
