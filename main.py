@@ -18,7 +18,7 @@ def enviar_alerta(msj):
         pass
 
 # --- PERSISTENCIA ---
-DB = "estado_simons_v18.json"
+DB = "estado_simons_v19.json"
 def cargar():
     if os.path.exists(DB):
         try:
@@ -54,10 +54,55 @@ def obtener_datos():
             if u.empty or a.empty: continue
             
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
-            ccl = (pa * r) / pu
-            ccls.append(ccl)
+            ccl_i = (pa * r) / pu
+            ccls.append(ccl_i)
             
-            hist = yf.download(t, period="5d", progress=False)
-            clima = "🟢" if hist.Close.iloc[-1] > hist.Close.iloc[0] else "🔴"
+            h_clima = yf.download(t, period="5d", progress=False)
+            clima_v = "🟢" if h_clima.Close.iloc[-1] > h_clima.Close.iloc[0] else "🔴"
             
-            filas.append({"Act
+            filas.append({"Activo": t, "Precio USD": pu, "Precio ARS": pa, "CCL": ccl_i, "Clima": clima_v})
+        except:
+            continue
+    return pd.DataFrame(filas), np.median(ccls) if ccls else 0
+
+df, avg_ccl = obtener_datos()
+
+# --- SEÑALES Y TRADING ---
+if not df.empty:
+    st.metric("📊 CCL Promedio", f"AR$ {avg_ccl:,.2f}")
+    
+    def calc_senal(row):
+        if row['CCL'] < (avg_ccl * 0.995) and row['Clima'] == "🟢":
+            return "🟢 COMPRA"
+        if row['CCL'] > (avg_ccl * 1.005):
+            return "🔴 VENTA"
+        return "⚖️ MANTENER"
+
+    df['Señal'] = df.apply(calc_senal, axis=1)
+    
+    upd = False
+    for _, r in df.iterrows():
+        tk = r['Activo']
+        if r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= 500000 and tk not in st.session_state.pos:
+            st.session_state.saldo -= 500000
+            st.session_state.pos[tk] = {"m": 500000, "pc": r['Precio ARS']}
+            enviar_alerta(f"🟢 COMPRA: {tk} a ${r['Precio ARS']:,.2f}")
+            upd = True
+        elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
+            p = st.session_state.pos.pop(tk)
+            st.session_state.saldo += p['m'] * (r['Precio ARS'] / p['pc'])
+            enviar_alerta(f"🔴 VENTA: {tk} a ${r['Precio ARS']:,.2f}")
+            upd = True
+            
+    if upd:
+        with open(DB, "w") as f:
+            json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
+
+    st.subheader("📊 Monitor de Mercado")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.subheader("🏢 Posiciones")
+    if st.session_state.pos:
+        st.table(pd.DataFrame([{"Activo":k, "Monto":f"${v['m']:,.0f}"} for k,v in st.session_state.pos.items()]))
+
+st_autorefresh(interval=600000, key="v19_final")
