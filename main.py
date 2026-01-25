@@ -1,106 +1,74 @@
 import streamlit as st
 import yfinance as yf
-from hmmlearn.hmm import GaussianHMM
-import numpy as np
 import pandas as pd
+import numpy as np
+import requests
+import json, os
 from streamlit_autorefresh import st_autorefresh
-import json, os, requests
-from datetime import datetime
 
-# --- CREDENCIALES ---
+# --- CONFIGURACIÓN ---
 TOKEN = "8519211806:AAFv54n320-ERA2a8eOjqgzQ4IjFnDFpvLY"
 CHAT_ID = "7338654543"
 
 def enviar_telegram(msj):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
-        requests.post(url, data={'chat_id': CHAT_ID, 'text': msj}, timeout=5)
+        requests.post(url, data={'chat_id': CHAT_ID, 'text': msj}, timeout=8)
     except:
-        pass # Que no rompa el programa si falla el internet
+        pass
 
-# --- CONFIGURACIÓN UI ---
 st.set_page_config(page_title="Simons-Arg Pro", layout="wide")
 
-# --- PERSISTENCIA DE DATOS ---
-DB = "estado_simons_v14.json"
-if 'init' not in st.session_state:
-    if os.path.exists(DB):
-        try:
-            with open(DB, "r") as f: d = json.load(f)
-        except: d = {"s": 10000000.0, "p": {}, "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": 10000000.0}]}
-    else:
-        d = {"s": 10000000.0, "p": {}, "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": 10000000.0}]}
-    st.session_state.update({'saldo': d["s"], 'pos': d["p"], 'hist': d["h"], 'init': True})
+# --- TEST DE TELEGRAM EN PANTALLA ---
+if st.sidebar.button("📩 Forzar Alerta"):
+    enviar_telegram("Prueba manual desde el panel.")
+    st.sidebar.success("Enviado. Revisa Telegram.")
 
-# --- CÁLCULO PATRIMONIO ---
-v_i = sum(float(i['m']) for i in st.session_state.pos.values())
-pat = st.session_state.saldo + v_i
+# --- DATOS ---
+DB = "estado_v15.json"
+if 'init' not in st.session_state:
+    st.session_state.update({'saldo': 10000000.0, 'pos': {}, 'init': True})
 
 st.title("🦅 Simons-Arg Pro")
-c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}")
-c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("Capital Inicial", "AR$ 10,000,000.00")
 
-st.subheader("📈 Evolución de Cartera")
-st.line_chart(pd.DataFrame(st.session_state.hist).set_index("fecha"))
+# --- DESCARGA DE DATOS SIN AUTO-ADJUST (Más estable) ---
+cfg = {'AAPL':20,'TSLA':15,'NVDA':24,'MSFT':30,'GGAL':10,'YPF':1}
 
-# --- MERCADO ---
-cfg = {'AAPL':20,'TSLA':15,'NVDA':24,'MSFT':30,'MELI':120,'GGAL':10,'YPF':1,'PAM':25,'BMA':10,'CEPU':10}
-
-@st.cache_data(ttl=600)
 def obtener_datos():
-    filas, ccls = [], []
+    filas = []
+    ccls = []
     for t, r in cfg.items():
         try:
-            u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
-            ba = f"{t if t!='YPF' else 'YPFD'}.BA"
-            a = yf.download(ba, period="2d", interval="1m", progress=False, auto_adjust=True)
-            if u.empty or a.empty: continue
+            # Descargamos sin parámetros complejos para evitar errores
+            u = yf.Ticker(t).history(period="1d", interval="1m")
+            ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
+            a = yf.Ticker(ba_ticker).history(period="1d", interval="1m")
             
-            pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
-            ccl = (pa * r) / pu
-            ccls.append(ccl)
-            
-            # Clima rápido
-            h = yf.download(t, period="5d", progress=False)
-            cl = "🟢" if h.Close.iloc[-1] > h.Close.iloc[0] else "🔴"
-            
-            filas.append({"Activo": t, "Precio USD": pu, "Precio ARS": pa, "CCL": ccl, "Clima": cl})
-        except: continue
+            if not u.empty and not a.empty:
+                pu = float(u.Close.iloc[-1])
+                pa = float(a.Close.iloc[-1])
+                ccl = (pa * r) / pu
+                ccls.append(ccl)
+                filas.append({"Activo": t, "USD": round(pu,2), "ARS": round(pa,2), "CCL": round(ccl,2)})
+        except Exception as e:
+            st.error(f"Error en {t}: {e}")
+            continue
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
-df, avg_ccl = obtener_datos()
+with st.spinner('Actualizando precios de mercado...'):
+    df, avg_ccl = obtener_datos()
 
-# --- TRADING Y VISUALIZACIÓN ---
+# --- MOSTRAR RESULTADOS SIEMPRE ---
 if not df.empty:
-    st.write(f"### 📊 Monitor (CCL Promedio: ${avg_ccl:,.2f})")
+    st.metric("📊 CCL Promedio", f"AR$ {avg_ccl:,.2f}")
     
-    # Crear señales
-    df['Señal'] = df.apply(lambda r: "🟢 COMPRA" if r['CCL'] < avg_ccl*0.995 and r['Clima']=="🟢" else ("🔴 VENTA" if r['CCL'] > avg_ccl*1.005 else "⚖️ MANTENER"), axis=1)
+    # Lógica de señales simplificada
+    df['Señal'] = df['CCL'].apply(lambda x: "🟢 COMPRA" if x < avg_ccl*0.99 else ("🔴 VENTA" if x > avg_ccl*1.01 else "⚖️ ESPERA"))
     
-    upd = False
-    for _, r in df.iterrows():
-        tk = r['Activo']
-        if r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= 500000 and tk not in st.session_state.pos:
-            st.session_state.saldo -= 500000
-            st.session_state.pos[tk] = {"m": 500000, "pc": r['Precio ARS']}
-            enviar_telegram(f"🟢 COMPRA: {tk} a ${r['Precio ARS']:,.2f}")
-            upd = True
-        elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
-            p = st.session_state.pos.pop(tk)
-            st.session_state.saldo += p['m'] * (r['Precio ARS'] / p['pc'])
-            enviar_telegram(f"🔴 VENTA: {tk} a ${r['Precio ARS']:,.2f}")
-            upd = True
-            
-    if upd:
-        with open(DB, "w") as f:
-            json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
-
-    st.subheader("🏢 Posiciones")
-    st.table(pd.DataFrame([{"Activo":t, "Invertido":f"${p['m']:,.0f}"} for t,p in st.session_state.pos.items()]))
-    
-    st.subheader("📋 Detalle de Mercado")
+    st.subheader("📋 Monitor de Mercado")
     st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.error("⚠️ No se pudieron obtener datos de Yahoo Finance. Intenta refrescar la página.")
+    st.info("Nota: Revisa si el mercado está abierto o si hay conexión a internet en el servidor.")
 
-st_autorefresh(interval=600000, key="fixed_bot")
+st_autorefresh(interval=300000, key="v15")
