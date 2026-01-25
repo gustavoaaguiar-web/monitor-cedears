@@ -8,15 +8,15 @@ import json
 import os
 from datetime import datetime
 
-# --- PERSISTENCIA ---
-DB_FILE = "estado_v4.json"
+# --- PERSISTENCIA (Saldo AR$ 10M) ---
+DB_FILE = "estado_v5.json"
 
 def cargar():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r") as f: return json.load(f)
         except: pass
-    return {"saldo": 10000000.0, "posiciones": {}, "hist": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "total": 10000000.0}]}
+    return {"saldo": 10000000.0, "posiciones": {}, "historial": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "total": 10000000.0}]}
 
 def guardar():
     v_act = sum(p['monto'] for p in st.session_state.pos.values())
@@ -33,7 +33,7 @@ def guardar():
 st.set_page_config(page_title="Simons-Arg Pro", layout="wide")
 if 'init' not in st.session_state:
     d = cargar()
-    st.session_state.update({'saldo': d["saldo"], 'pos': d["posiciones"], 'hist': d.get("historial", d.get("hist")), 'init': True})
+    st.session_state.update({'saldo': d["saldo"], 'pos': d["posiciones"], 'hist': d.get("historial", []), 'init': True})
 
 v_p = sum(p['monto'] for p in st.session_state.pos.values())
 patrimonio = st.session_state.saldo + v_p
@@ -44,15 +44,11 @@ c1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}", f"{((patrimonio/10000000
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Invertido", f"AR$ {v_p:,.2f}")
 
-st.subheader("📈 Evolución")
+st.subheader("📈 Evolución de Cartera")
 st.line_chart(pd.DataFrame(st.session_state.hist).set_index("fecha"))
 
 # --- MERCADO ---
-cfg_act = {
-    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 
-    'MELI': 120, 'GGAL': 10, 'YPF': 1, 'PAM': 25, 
-    'BMA': 10, 'CEPU': 10
-}
+cfg_act = {'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, 'GGAL': 10, 'YPF': 1, 'PAM': 25, 'BMA': 10, 'CEPU': 10}
 
 def obtener():
     filas, ccls = [], []
@@ -76,30 +72,32 @@ def obtener():
 if st.button('🔄 Actualizar'): st.rerun()
 df, avg_ccl = obtener()
 
-# --- BOT ---
+# --- BOT Y SEÑALES ---
 if not df.empty:
+    # REGENERAMOS LA COLUMNA DE SEÑAL
+    def calc_senal(row):
+        if row['CCL'] < avg_ccl * 0.995 and row['Clima'] != "🔴": return "🟢🐂 COMPRA"
+        if row['CCL'] > avg_ccl * 1.005: return "🔴🐻 VENTA"
+        return "⚖️ MANTENER"
+    
+    df['Señal'] = df.apply(calc_senal, axis=1)
+    
     cambio = False
     for _, row in df.iterrows():
         tk = row['Activo']
-        is_low = row['CCL'] < avg_ccl * 0.995
-        is_high = row['CCL'] > avg_ccl * 1.005
-        
-        # Compra
-        if is_low and row['Clima'] != "🔴" and st.session_state.saldo >= 500000 and tk not in st.session_state.pos:
+        if row['Señal'] == "🟢🐂 COMPRA" and st.session_state.saldo >= 500000 and tk not in st.session_state.pos:
             st.session_state.saldo -= 500000
             st.session_state.pos[tk] = {"monto": 500000, "pc": row['Precio ARS']}
             st.toast(f"Comprado {tk}")
             cambio = True
-        # Venta
-        elif is_high and tk in st.session_state.pos:
+        elif row['Señal'] == "🔴🐻 VENTA" and tk in st.session_state.pos:
             p = st.session_state.pos.pop(tk)
             st.session_state.saldo += p['monto'] * (row['Precio ARS'] / p['pc'])
             st.toast(f"Vendido {tk}")
             cambio = True
-            
     if cambio: guardar()
     
-    st.subheader("🏢 Posiciones")
+    st.subheader("🏢 Posiciones Actuales")
     if st.session_state.pos:
         det = []
         for t, p in st.session_state.pos.items():
@@ -107,7 +105,7 @@ if not df.empty:
             det.append({"Activo": t, "Invertido": f"${p['monto']:,.0f}", "Resultado": f"{((act/p['pc'])-1)*100:+.2f}%"})
         st.table(pd.DataFrame(det))
     
-    st.subheader("📊 Monitor")
+    st.subheader("📊 Monitor de Mercado")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 st_autorefresh(interval=900000, key="bot")
