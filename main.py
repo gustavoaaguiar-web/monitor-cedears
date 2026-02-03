@@ -8,7 +8,7 @@ import json, os, smtplib
 from datetime import datetime
 from email.message import EmailMessage
 
-# --- CONFIGURACIÓN DE CORREO (YA INTEGRADA) ---
+# --- CONFIGURACIÓN DE CORREO ---
 MI_MAIL = "gustavoaaguiar99@gmail.com"
 CLAVE_APP = "zmupyxmxwbjsllsu" 
 
@@ -27,7 +27,7 @@ def enviar_alerta_mail(asunto, cuerpo):
         st.error(f"Error enviando mail: {e}")
 
 # --- DATABASE / PERSISTENCIA ---
-DB = "bot_v10_mail.json"
+DB = "bot_v11_final.json"
 
 def load():
     if os.path.exists(DB):
@@ -48,7 +48,7 @@ def save():
         json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
 
 # --- UI CONFIG ---
-st.set_page_config(page_title="Simons-Arg + Mail", layout="wide")
+st.set_page_config(page_title="Simons-Arg v11 Pro", layout="wide")
 
 if 'init' not in st.session_state:
     d = load()
@@ -57,26 +57,30 @@ if 'init' not in st.session_state:
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
-st.title("🦅 Simons-Arg Pro + Alertas")
+st.title("🦅 Simons-Arg v11: Monitor Pro")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/10000000.0)-1)*100:+.2f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital Inicial", "AR$ 10,000,000.00")
 
-st.subheader("📈 Evolución de Cartera")
-st.line_chart(pd.DataFrame(st.session_state.hist).set_index("fecha"))
-
-# --- MARKET DATA ---
-cfg = {'AAPL':20,'TSLA':15,'NVDA':24,'MSFT':30,'MELI':120,'GGAL':10,'YPF':1,'PAM':25,'BMA':10,'CEPU':10}
+# --- MARKET DATA & RATIOS ---
+# Se agregaron GOOGL, AMZN, META, VIST y PAM
+cfg = {
+    'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
+    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':1, 'PAM':25
+}
 
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
-            ba = f"{t if t!='YPF' else 'YPFD'}.BA"
-            a = yf.download(ba, period="2d", interval="1m", progress=False, auto_adjust=True)
+            ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
+            a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
+            
             if u.empty or a.empty: continue
+            
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
             ccls.append(ccl)
@@ -111,13 +115,13 @@ if not df.empty:
             st.session_state.saldo -= 500000
             st.session_state.pos[tk] = {"m": 500000, "pc": r['ARS']}
             upd = True
-            enviar_alerta_mail(f"🟢 SIMONS: COMPRA {tk}", f"Se ejecutó compra de {tk} a AR$ {r['ARS']:,.2f}.\nCCL: {r['CCL']:.2f}")
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons detectó entrada en {tk} a AR$ {r['ARS']:,.2f}.\nCCL: {r['CCL']:.2f}")
             
         elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
             p = st.session_state.pos.pop(tk)
             st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
             upd = True
-            enviar_alerta_mail(f"🔴 SIMONS: VENTA {tk}", f"Se ejecutó venta de {tk} a AR$ {r['ARS']:,.2f}.\nResultado: {((r['ARS']/p['pc'])-1)*100:.2f}%")
+            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons cerró {tk} a AR$ {r['ARS']:,.2f}.\nVariación: {((r['ARS']/p['pc'])-1)*100:+.2f}%")
     
     if upd: save()
 
@@ -132,4 +136,4 @@ if not df.empty:
     st.subheader("📊 Monitor de Mercado")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-st_autorefresh(interval=900000, key="bot_mail_v10")
+st_autorefresh(interval=900000, key="bot_v11_refresh")
