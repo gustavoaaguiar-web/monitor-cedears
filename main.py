@@ -57,7 +57,7 @@ if 'init' not in st.session_state:
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
-st.title("🦅 Simons-Arg v11: Monitor Pro")
+st.title("🦅 Simons-GG v01: Monitor Pro🤑")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/10000000.0)-1)*100:+.2f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
