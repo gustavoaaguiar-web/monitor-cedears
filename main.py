@@ -28,8 +28,6 @@ def enviar_alerta_mail(asunto, cuerpo):
 
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
-
-# Ajuste a 30 Millones + 5% de ganancia acumulada
 CAPITAL_INICIAL = 30000000.0
 GANANCIA_PREVIA = 0.05 
 SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
@@ -39,12 +37,7 @@ def load():
         try:
             with open(DB, "r") as f: return json.load(f)
         except: pass
-    # Si es la primera vez, inicia con 31.5M
-    return {
-        "s": SALDO_ACTUAL, 
-        "p": {}, 
-        "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]
-    }
+    return {"s": SALDO_ACTUAL, "p": {}, "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]}
 
 def save():
     v_a = sum(float(i['m']) for i in st.session_state.pos.values())
@@ -69,33 +62,40 @@ pat = st.session_state.saldo + v_i
 
 st.title("🦅 Simons GG v01: Gestión de Capital")
 c1, c2, c3 = st.columns(3)
-# El delta ahora compara contra los 30M iniciales
+# Delta respecto a los 30M
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
+c3.metric("Capital Inicial", f"AR$ {CAPITAL_INICIAL:,.2f}")
 
 # --- MARKET DATA & RATIOS ---
+# Incluye PAMP, VIST y los demás activos sumados hoy
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAMP':25
 }
 
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
+            # Manejo de tickers para Pampa y YPF
+            t_usa = 'PAM' if t == 'PAMP' else t
             ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
+            
+            u = yf.download(t_usa, period="2d", interval="1m", progress=False, auto_adjust=True)
             a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
             
             if u.empty or a.empty: continue
             
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
-            ccls.append(ccl)
             
-            h = yf.download(t, period="3mo", interval="1d", progress=False)
+            # Filtro para evitar el CCL de $21 (solo valores realistas)
+            if ccl > 500:
+                ccls.append(ccl)
+            
+            h = yf.download(t_usa, period="3mo", interval="1d", progress=False)
             cl = "⚪"
             if not h.empty and len(h)>10:
                 re = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
@@ -104,12 +104,12 @@ def get_data():
         except: continue
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
-if st.button('🔄 Sincronizar con Bull Market'): st.rerun()
+if st.button('🔄 Sincronizar Mercado'): st.rerun()
 df, avg_ccl = get_data()
 
-# --- LOGIC & MAIL TRIGGER ---
+# --- LÓGICA DE SEÑALES ---
 if not df.empty:
-    st.metric("📊 CCL Promedio (Benchmark)", f"AR$ {avg_ccl:,.2f}")
+    st.markdown(f"**CCL Promedio Detectado:** AR$ {avg_ccl:,.2f}")
     
     def get_s(r):
         if r['CCL'] < avg_ccl * 0.995 and r['Clima'] != "🔴": return "🟢 COMPRA"
@@ -119,7 +119,6 @@ if not df.empty:
     df['Señal'] = df.apply(get_s, axis=1)
     
     upd = False
-    # Definimos órdenes de 1.5M (5% del capital total) para diversificar
     MONTO_OPERACION = 1500000 
     
     for _, r in df.iterrows():
@@ -128,25 +127,30 @@ if not df.empty:
             st.session_state.saldo -= MONTO_OPERACION
             st.session_state.pos[tk] = {"m": MONTO_OPERACION, "pc": r['ARS']}
             upd = True
-            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició posición en {tk} a AR$ {r['ARS']:,.2f}.\nCapital asignado: {MONTO_OPERACION}")
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició {tk} a AR$ {r['ARS']:,.2f}")
             
         elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
             p = st.session_state.pos.pop(tk)
             st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
             upd = True
-            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk} a AR$ {r['ARS']:,.2f}.\nProfit del trade: {((r['ARS']/p['pc'])-1)*100:+.2f}%")
+            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk} a AR$ {r['ARS']:,.2f}")
     
     if upd: save()
 
-    st.subheader("🏢 Cartera Activa")
+    # --- TABLA DE CARTERA ---
+    st.subheader("💰 Cartera Activa")
     if st.session_state.pos:
         pos_list = []
         for t, p in st.session_state.pos.items():
-            act = df[df.Activo==t].iloc[0]['ARS'] if t in df.Activo.values else p['pc']
-            pos_list.append({"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{((act/p['pc'])-1)*100:+.2f}%"})
-        st.table(pd.DataFrame(pos_list))
+            if t in df.Activo.values:
+                act = df[df.Activo==t].iloc[0]['ARS']
+                rend = ((act/p['pc'])-1)*100
+                if rend > 100: rend = 0.0 # Fix para errores de carga
+                pos_list.append({"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{rend:+.2f}%"})
+        if pos_list: st.table(pd.DataFrame(pos_list))
 
+    # --- TABLA DE MONITOREO ---
     st.subheader("📊 Monitor de Arbitraje")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df[['Activo', 'USD', 'ARS', 'CCL', 'Clima', 'Señal']], use_container_width=True, hide_index=True)
 
-st_autorefresh(interval=600000, key="simons_30m_refresh")
+st_autorefresh(interval=600000, key="simons_v1_stable")
