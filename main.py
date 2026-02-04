@@ -1,4 +1,4 @@
-Import streamlit as st
+import streamlit as st
 import yfinance as yf
 from hmmlearn.hmm import GaussianHMM
 import numpy as np
@@ -150,6 +150,3 @@ if not df.empty:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 st_autorefresh(interval=600000, key="simons_30m_refresh")
-
-
-Este es el último q funcionó bien, por ahora queda ese
