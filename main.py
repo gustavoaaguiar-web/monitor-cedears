@@ -64,11 +64,11 @@ c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital Inicial", "AR$ 10,000,000.00")
 
 # --- MARKET DATA & RATIOS ---
-# Ratio de VIST ajustado a 3 según análisis de mercado local vs ADR
+# Se agregaron GOOGL, AMZN, META, VIST y PAM
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':1, 'PAM':25
 }
 
 def get_data():
