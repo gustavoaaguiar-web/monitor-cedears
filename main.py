@@ -23,8 +23,7 @@ def enviar_alerta_mail(asunto, cuerpo):
         server.login(MI_MAIL, CLAVE_APP)
         server.send_message(msg)
         server.quit()
-    except Exception as e:
-        st.error(f"Error enviando mail: {e}")
+    except: pass
 
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
@@ -59,58 +58,62 @@ if 'init' not in st.session_state:
 
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
-rendimiento_bot = ((pat / CAPITAL_INICIAL) - 1) * 100
+rend_bot = ((pat / CAPITAL_INICIAL) - 1) * 100
 
-# --- FUNCION BENCHMARK ---
+# --- FUNCION BENCHMARK CORREGIDA ---
 @st.cache_data(ttl=3600)
 def get_benchmarks():
-    # Comparamos rendimiento de los últimos 7 días hábiles (aprox 10 días corridos)
     indices = {"S&P 500": "SPY", "Merval (USD)": "^MERV"}
     bench_data = {}
     for name, ticker in indices.items():
-        h = yf.download(ticker, period="10d", interval="1d", progress=False)
-        if not h.empty:
-            start_price = h.Close.iloc[0]
-            end_price = h.Close.iloc[-1]
-            var = ((end_price / start_price) - 1) * 100
-            bench_data[name] = var
+        try:
+            h = yf.download(ticker, period="10d", interval="1d", progress=False)
+            if not h.empty and len(h) > 1:
+                v = ((h.Close.iloc[-1] / h.Close.iloc[0]) - 1) * 100
+                bench_data[name] = float(v)
+        except: continue
     return bench_data
 
 bench = get_benchmarks()
 
-st.title("🦅 Simons GG v01: Performance vs Mercado")
+st.title("🦅 Simons GG v01")
 
 # --- DASHBOARD PRINCIPAL ---
 c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{rendimiento_bot:+.2f}%")
+c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{rend_bot:+.2f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital Inicial", f"AR$ {CAPITAL_INICIAL:,.2f}")
 
 st.markdown("---")
 st.subheader("📊 Comparativa de Rendimiento (7 Días Hábiles)")
 b1, b2, b3 = st.columns(3)
-b1.metric("Simons GG (Bot)", f"{rendimiento_bot:+.2f}%", delta_color="normal")
-if "S&P 500" in bench:
-    diff_spy = rendimiento_bot - bench["S&P 500"]
-    b2.metric("S&P 500 (SPY)", f"{bench['S&P 500']:+.2f}%", f"{diff_spy:+.2f}% vs Bot")
-if "Merval (USD)" in bench:
-    diff_merv = rendimiento_bot - bench["Merval (USD)"]
-    b3.metric("Merval (Merval)", f"{bench['Merval (USD)']:+.2f}%", f"{diff_merv:+.2f}% vs Bot")
+b1.metric("Simons GG (Bot)", f"{rend_bot:+.2f}%")
 
-# --- MARKET DATA & LOGIC (Resumida para lectura) ---
+# Validación para evitar el TypeError
+if "S&P 500" in bench:
+    b2.metric("S&P 500 (SPY)", f"{bench['S&P 500']:+.2f}%", f"{rend_bot - bench['S&P 500']:+.2f}% vs Bot")
+else:
+    b2.info("S&P 500: Cargando datos...")
+
+if "Merval (USD)" in bench:
+    b3.metric("Merval (Indice)", f"{bench['Merval (USD)']:+.2f}%", f"{rend_bot - bench['Merval (USD)']:+.2f}% vs Bot")
+else:
+    b3.info("Merval: Cargando datos...")
+
+# --- MARKET DATA & LOGIC ---
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
-    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
+    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'VIST':3,
+    'GOOGL':58, 'AMZN':144, 'META':24, 'PAM':25
 }
 
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
-            ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
-            a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
+            u = yf.download(t, period="2d", interval="1m", progress=False)
+            ba_t = f"{t if t!='YPF' else 'YPFD'}.BA"
+            a = yf.download(ba_t, period="2d", interval="1m", progress=False)
             if u.empty or a.empty: continue
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
@@ -125,17 +128,13 @@ def get_data():
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
 if st.button('🔄 Sincronizar y Comparar'): st.rerun()
+
 df, avg_ccl = get_data()
 
-# Lógica de señales y posiciones... (se mantiene igual que v01.1)
-# [ ... Resto del código de lógica de trading ... ]
-
 if not df.empty:
-    def get_s(r):
-        if r['CCL'] < avg_ccl * 0.995 and r['Clima'] != "🔴": return "🟢 COMPRA"
-        if r['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
-        return "⚖️ MANTENER"
-    df['Señal'] = df.apply(get_s, axis=1)
+    st.metric("📊 CCL Promedio", f"AR$ {avg_ccl:,.2f}")
+    df['Señal'] = df.apply(lambda r: "🟢 COMPRA" if r['CCL'] < avg_ccl * 0.995 and r['Clima'] != "🔴" else ("🔴 VENTA" if r['CCL'] > avg_ccl * 1.005 else "⚖️ MANTENER"), axis=1)
+    
     upd = False
     for _, r in df.iterrows():
         tk = r['Activo']
@@ -143,18 +142,18 @@ if not df.empty:
             st.session_state.saldo -= 1500000
             st.session_state.pos[tk] = {"m": 1500000, "pc": r['ARS']}
             upd = True
-            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició {tk}")
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició {tk} a {r['ARS']}")
         elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
             p = st.session_state.pos.pop(tk)
             st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
             upd = True
             enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk}")
     if upd: save()
+    
     st.subheader("🏢 Cartera Activa")
     if st.session_state.pos:
-        pos_list = [{"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{((df[df.Activo==t].iloc[0]['ARS']/p['pc'])-1)*100:+.2f}%"} for t, p in st.session_state.pos.items() if t in df.Activo.values]
-        st.table(pd.DataFrame(pos_list))
-    st.subheader("📊 Monitor de Mercado")
+        p_l = [{"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{((df[df.Activo==t].iloc[0]['ARS']/p['pc'])-1)*100:+.2f}%"} for t, p in st.session_state.pos.items() if t in df.Activo.values]
+        st.table(pd.DataFrame(p_l))
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-st_autorefresh(interval=600000, key="simons_perf_refresh")
+st_autorefresh(interval=600000, key="simons_fix_refresh")
