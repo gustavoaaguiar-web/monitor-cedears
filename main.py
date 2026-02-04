@@ -67,7 +67,7 @@ if 'init' not in st.session_state:
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
-st.title("🦅 Simons GG v01: Gestión de Capital")
+st.title("🦅 Simons GG v01🤑")
 c1, c2, c3 = st.columns(3)
 # El delta ahora compara contra los 30M iniciales
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
@@ -78,7 +78,7 @@ c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAMP':1
 }
 
 def get_data():
