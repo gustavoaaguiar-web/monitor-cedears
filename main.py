@@ -28,8 +28,6 @@ def enviar_alerta_mail(asunto, cuerpo):
 
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
-
-# Ajuste a 30 Millones + 5% de ganancia acumulada
 CAPITAL_INICIAL = 30000000.0
 GANANCIA_PREVIA = 0.05 
 SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
@@ -39,7 +37,6 @@ def load():
         try:
             with open(DB, "r") as f: return json.load(f)
         except: pass
-    # Si es la primera vez, inicia con 31.5M
     return {
         "s": SALDO_ACTUAL, 
         "p": {}, 
@@ -69,24 +66,28 @@ pat = st.session_state.saldo + v_i
 
 st.title("🦅 Simons GG v01🤑")
 c1, c2, c3 = st.columns(3)
-# El delta ahora compara contra los 30M iniciales
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
 
-# --- MARKET DATA & RATIOS ---
+# --- MARKET DATA & RATIOS (PAMP Agregado) ---
+# Ticker USA : Ratio
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAMP':1
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25 # PAM es Pampa en USA
 }
 
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
+            # Lógica especial para tickers que cambian nombre en BA
+            if t == 'YPF': ba_ticker = "YPFD.BA"
+            elif t == 'PAM': ba_ticker = "PAMP.BA" # Pampa local
+            else: ba_ticker = f"{t}.BA"
+
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
-            ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
             a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
             
             if u.empty or a.empty: continue
@@ -99,8 +100,11 @@ def get_data():
             cl = "⚪"
             if not h.empty and len(h)>10:
                 re = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
-                cl = "🟢" if GaussianHMM(n_components=3).fit(re).predict(re)[-1]==0 else "🔴"
-            filas.append({"Activo": t, "USD": pu, "ARS": pa, "CCL": ccl, "Clima": cl})
+                cl = "🟢" if GaussianHMM(n_components=3, random_state=42).fit(re).predict(re)[-1]==0 else "🔴"
+            
+            # Nombre amigable para la tabla
+            nombre_mostrar = "PAMP" if t == 'PAM' else t
+            filas.append({"Activo": nombre_mostrar, "USD": pu, "ARS": pa, "CCL": ccl, "Clima": cl})
         except: continue
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
@@ -119,7 +123,6 @@ if not df.empty:
     df['Señal'] = df.apply(get_s, axis=1)
     
     upd = False
-    # Definimos órdenes de 1.5M (5% del capital total) para diversificar
     MONTO_OPERACION = 1500000 
     
     for _, r in df.iterrows():
