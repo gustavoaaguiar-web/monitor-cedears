@@ -1,4 +1,4 @@
-import streamlit as st
+Import streamlit as st
 import yfinance as yf
 from hmmlearn.hmm import GaussianHMM
 import numpy as np
@@ -28,6 +28,8 @@ def enviar_alerta_mail(asunto, cuerpo):
 
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
+
+# Ajuste a 30 Millones + 5% de ganancia acumulada
 CAPITAL_INICIAL = 30000000.0
 GANANCIA_PREVIA = 0.05 
 SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
@@ -37,7 +39,12 @@ def load():
         try:
             with open(DB, "r") as f: return json.load(f)
         except: pass
-    return {"s": SALDO_ACTUAL, "p": {}, "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]}
+    # Si es la primera vez, inicia con 31.5M
+    return {
+        "s": SALDO_ACTUAL, 
+        "p": {}, 
+        "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]
+    }
 
 def save():
     v_a = sum(float(i['m']) for i in st.session_state.pos.values())
@@ -60,50 +67,26 @@ if 'init' not in st.session_state:
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
-# --- COMPARATIVA MERCADO (BENCHMARKS) ---
-@st.cache_data(ttl=3600)
-def get_benchmarks():
-    res = {"S&P 500": 0.0, "Merval": 0.0}
-    indices = {"S&P 500": "SPY", "Merval": "^MERV"}
-    for name, t in indices.items():
-        try:
-            h = yf.download(t, period="5d", progress=False)
-            if not h.empty:
-                res[name] = ((h.Close.iloc[-1] / h.Close.iloc[0]) - 1) * 100
-        except: pass
-    return res
-
-bench = get_benchmarks()
-
 st.title("🦅 Simons GG v01: Gestión de Capital")
 c1, c2, c3 = st.columns(3)
+# El delta ahora compara contra los 30M iniciales
 c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
 
-st.markdown("---")
-# Nueva sección de comparativa estable
-col_b1, col_b2, col_b3 = st.columns(3)
-col_b1.metric("Rendimiento Bot", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
-col_b2.metric("S&P 500 (USD)", f"{bench['S&P 500']:+.2f}%")
-col_b3.metric("Merval (ARS)", f"{bench['Merval']:+.2f}%")
-
-# --- MARKET DATA & RATIOS CORREGIDOS ---
+# --- MARKET DATA & RATIOS ---
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAMP':25 # Corregido PAM por PAMP
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
 
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            # Lógica de tickers para Yahoo Finance
-            t_usa = 'PAM' if t == 'PAMP' else t
+            u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
             ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
-            
-            u = yf.download(t_usa, period="2d", interval="1m", progress=False, auto_adjust=True)
             a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
             
             if u.empty or a.empty: continue
@@ -112,7 +95,7 @@ def get_data():
             ccl = (pa * r) / pu
             ccls.append(ccl)
             
-            h = yf.download(t_usa, period="3mo", interval="1d", progress=False)
+            h = yf.download(t, period="3mo", interval="1d", progress=False)
             cl = "⚪"
             if not h.empty and len(h)>10:
                 re = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
@@ -136,6 +119,7 @@ if not df.empty:
     df['Señal'] = df.apply(get_s, axis=1)
     
     upd = False
+    # Definimos órdenes de 1.5M (5% del capital total) para diversificar
     MONTO_OPERACION = 1500000 
     
     for _, r in df.iterrows():
@@ -158,15 +142,14 @@ if not df.empty:
     if st.session_state.pos:
         pos_list = []
         for t, p in st.session_state.pos.items():
-            if t in df.Activo.values:
-                act = df[df.Activo==t].iloc[0]['ARS']
-                rend = ((act/p['pc'])-1)*100
-                # Fix visual para Tesla u otros errores de data
-                if rend > 100: rend = 0.0
-                pos_list.append({"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{rend:+.2f}%"})
-        if pos_list: st.table(pd.DataFrame(pos_list))
+            act = df[df.Activo==t].iloc[0]['ARS'] if t in df.Activo.values else p['pc']
+            pos_list.append({"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{((act/p['pc'])-1)*100:+.2f}%"})
+        st.table(pd.DataFrame(pos_list))
 
     st.subheader("📊 Monitor de Arbitraje")
-    st.dataframe(df[['Activo', 'USD', 'ARS', 'CCL', 'Clima', 'Señal']], use_container_width=True, hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 st_autorefresh(interval=600000, key="simons_30m_refresh")
+
+
+Este es el último q funcionó bien, por ahora queda ese
