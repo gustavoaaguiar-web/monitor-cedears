@@ -4,124 +4,169 @@ from hmmlearn.hmm import GaussianHMM
 import numpy as np
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
-import json, os
+import json, os, smtplib
+from datetime import datetime
+from email.message import EmailMessage
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE CORREO ---
+MI_MAIL = "gustavoaaguiar99@gmail.com"
+CLAVE_APP = "zmupyxmxwbjsllsu" 
+
+def enviar_alerta_mail(asunto, cuerpo):
+    msg = EmailMessage()
+    msg.set_content(cuerpo)
+    msg['Subject'] = asunto
+    msg['From'] = MI_MAIL
+    msg['To'] = MI_MAIL
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(MI_MAIL, CLAVE_APP)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        st.error(f"Error enviando mail: {e}")
+
+# --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
 CAPITAL_INICIAL = 30000000.0
-# Tickers corregidos (PAMP y YPF con sus variantes)
-cfg = {
-    'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
-    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'VIST':3,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'PAMP':25 
-}
+GANANCIA_PREVIA = 0.05 
+SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
 
-def load_db():
+def load():
     if os.path.exists(DB):
         try:
             with open(DB, "r") as f: return json.load(f)
         except: pass
-    return {"s": CAPITAL_INICIAL * 1.05, "p": {}, "h": []}
+    return {"s": SALDO_ACTUAL, "p": {}, "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]}
 
-st.set_page_config(page_title="Simons GG v01.6", layout="wide")
+def save():
+    v_a = sum(float(i['m']) for i in st.session_state.pos.values())
+    tot = st.session_state.saldo + v_a
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    if not st.session_state.hist or st.session_state.hist[-1]['fecha'] != hoy:
+        st.session_state.hist.append({"fecha": hoy, "t": tot})
+    else: 
+        st.session_state.hist[-1]['t'] = tot
+    with open(DB, "w") as f:
+        json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
+
+# --- UI CONFIG ---
+st.set_page_config(page_title="Simons GG v01 - 30M", layout="wide")
 
 if 'init' not in st.session_state:
-    d = load_db()
-    st.session_state.update({'saldo': d["s"], 'pos': d["p"], 'init': True})
+    d = load()
+    st.session_state.update({'saldo': d["s"], 'pos': d["p"], 'hist': d["h"], 'init': True})
 
-# --- BENCHMARKS BLINDADOS (Línea 95 Fix) ---
-@st.cache_data(ttl=600)
+v_i = sum(float(i['m']) for i in st.session_state.pos.values())
+pat = st.session_state.saldo + v_i
+
+# --- COMPARATIVA MERCADO (BENCHMARKS) ---
+@st.cache_data(ttl=3600)
 def get_benchmarks():
     res = {"S&P 500": 0.0, "Merval": 0.0}
     indices = {"S&P 500": "SPY", "Merval": "^MERV"}
     for name, t in indices.items():
         try:
-            h = yf.download(t, period="5d", interval="1d", progress=False)
-            if not h.empty and len(h) > 1:
-                val = ((h.Close.iloc[-1] / h.Close.iloc[0]) - 1) * 100
-                res[name] = float(val)
+            h = yf.download(t, period="5d", progress=False)
+            if not h.empty:
+                res[name] = ((h.Close.iloc[-1] / h.Close.iloc[0]) - 1) * 100
         except: pass
     return res
 
-# --- MERCADO Y CCL (Fix Pampa y Tesla) ---
-def fetch_market():
+bench = get_benchmarks()
+
+st.title("🦅 Simons GG v01: Gestión de Capital")
+c1, c2, c3 = st.columns(3)
+c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
+c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
+c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
+
+st.markdown("---")
+# Nueva sección de comparativa estable
+col_b1, col_b2, col_b3 = st.columns(3)
+col_b1.metric("Rendimiento Bot", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
+col_b2.metric("S&P 500 (USD)", f"{bench['S&P 500']:+.2f}%")
+col_b3.metric("Merval (ARS)", f"{bench['Merval']:+.2f}%")
+
+# --- MARKET DATA & RATIOS CORREGIDOS ---
+cfg = {
+    'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
+    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAMP':25 # Corregido PAM por PAMP
+}
+
+def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
+            # Lógica de tickers para Yahoo Finance
             t_usa = 'PAM' if t == 'PAMP' else t
-            t_ars = 'YPFD.BA' if t == 'YPF' else f"{t}.BA"
+            ba_ticker = f"{t if t!='YPF' else 'YPFD'}.BA"
             
-            u = yf.download(t_usa, period="2d", progress=False)
-            a = yf.download(t_ars, period="2d", progress=False)
+            u = yf.download(t_usa, period="2d", interval="1m", progress=False, auto_adjust=True)
+            a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
             
             if u.empty or a.empty: continue
             
-            p_u = float(u.Close.iloc[-1])
-            p_a = float(a.Close.iloc[-1])
+            pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
+            ccl = (pa * r) / pu
+            ccls.append(ccl)
             
-            # Validación de CCL coherente (> 500) para evitar el error de los $21.52
-            ccl_i = (p_a * r) / p_u
-            if ccl_i > 500:
-                ccls.append(ccl_i)
-            
-            clima = "🟢" if p_u > u.Close.iloc[-2] else "🔴"
-            filas.append({"Activo": t, "ARS": p_a, "CCL": ccl_i, "Clima": clima})
+            h = yf.download(t_usa, period="3mo", interval="1d", progress=False)
+            cl = "⚪"
+            if not h.empty and len(h)>10:
+                re = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
+                cl = "🟢" if GaussianHMM(n_components=3).fit(re).predict(re)[-1]==0 else "🔴"
+            filas.append({"Activo": t, "USD": pu, "ARS": pa, "CCL": ccl, "Clima": cl})
         except: continue
+    return pd.DataFrame(filas), np.median(ccls) if ccls else 0
+
+if st.button('🔄 Sincronizar con Bull Market'): st.rerun()
+df, avg_ccl = get_data()
+
+# --- LOGIC & MAIL TRIGGER ---
+if not df.empty:
+    st.metric("📊 CCL Promedio (Benchmark)", f"AR$ {avg_ccl:,.2f}")
     
-    df = pd.DataFrame(filas)
-    avg = np.median(ccls) if len(ccls) > 0 else 0
-    return df, avg
-
-st.title("🦅 Simons GG v01.6")
-
-with st.spinner('Sincronizando...'):
-    df_mkt, avg_ccl = fetch_market()
-    bench = get_benchmarks()
-
-# --- PATRIMONIO ---
-val_cartera = 0
-for t, p in st.session_state.pos.items():
-    if not df_mkt.empty and t in df_mkt['Activo'].values:
-        actual = df_mkt.loc[df_mkt['Activo'] == t, 'ARS'].values[0]
-        # Si el precio es ridículo (Tesla fix), usamos el precio de compra
-        ratio = actual / p['pc']
-        val_cartera += p['m'] * (ratio if 0.5 < ratio < 1.5 else 1.0)
-    else: val_cartera += p['m']
-
-patrimonio = st.session_state.saldo + val_cartera
-rend_bot = ((patrimonio / CAPITAL_INICIAL) - 1) * 100
-
-# --- UI: MÉTRICAS ---
-c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {patrimonio:,.0f}", f"{rend_bot:+.2f}%")
-c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("CCL Promedio", f"AR$ {avg_ccl:,.2f}")
-
-st.markdown("---")
-st.subheader("📊 Comparativa vs Mercado")
-b1, b2, b3 = st.columns(3)
-b1.metric("Bot", f"{rend_bot:+.2f}%")
-# Fix de la línea 95: Aseguramos que siempre haya un número
-sp_val = bench.get("S&P 500", 0.0)
-mer_val = bench.get("Merval", 0.0)
-b2.metric("S&P 500", f"{sp_val:+.2f}%")
-b3.metric("Merval Index", f"{mer_val:+.2f}%")
-
-# --- UI: TABLA DE SEÑALES ---
-if not df_mkt.empty and avg_ccl > 0:
-    def get_sig(row):
-        if row['CCL'] < avg_ccl * 0.995: return "🟢 COMPRA"
-        if row['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
+    def get_s(r):
+        if r['CCL'] < avg_ccl * 0.995 and r['Clima'] != "🔴": return "🟢 COMPRA"
+        if r['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
         return "⚖️ MANTENER"
-
-    df_mkt['Señal'] = df_mkt.apply(get_sig, axis=1)
     
-    st.subheader("🏢 Monitor de Mercado y Pampa")
-    st.dataframe(df_mkt[['Activo', 'ARS', 'CCL', 'Clima', 'Señal']], use_container_width=True, hide_index=True)
+    df['Señal'] = df.apply(get_s, axis=1)
+    
+    upd = False
+    MONTO_OPERACION = 1500000 
+    
+    for _, r in df.iterrows():
+        tk = r['Activo']
+        if r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= MONTO_OPERACION and tk not in st.session_state.pos:
+            st.session_state.saldo -= MONTO_OPERACION
+            st.session_state.pos[tk] = {"m": MONTO_OPERACION, "pc": r['ARS']}
+            upd = True
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició posición en {tk} a AR$ {r['ARS']:,.2f}.\nCapital asignado: {MONTO_OPERACION}")
+            
+        elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
+            p = st.session_state.pos.pop(tk)
+            st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
+            upd = True
+            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk} a AR$ {r['ARS']:,.2f}.\nProfit del trade: {((r['ARS']/p['pc'])-1)*100:+.2f}%")
+    
+    if upd: save()
 
+    st.subheader("🏢 Cartera Activa")
     if st.session_state.pos:
-        st.subheader("💰 Cartera Actual")
-        st.write(list(st.session_state.pos.keys()))
+        pos_list = []
+        for t, p in st.session_state.pos.items():
+            if t in df.Activo.values:
+                act = df[df.Activo==t].iloc[0]['ARS']
+                rend = ((act/p['pc'])-1)*100
+                # Fix visual para Tesla u otros errores de data
+                if rend > 100: rend = 0.0
+                pos_list.append({"Activo":t, "Inversión":f"${p['m']:,.0f}", "Rendimiento":f"{rend:+.2f}%"})
+        if pos_list: st.table(pd.DataFrame(pos_list))
 
-st.button('🔄 Actualizar Ahora')
-st_autorefresh(interval=600000, key="v6_refresh")
+    st.subheader("📊 Monitor de Arbitraje")
+    st.dataframe(df[['Activo', 'USD', 'ARS', 'CCL', 'Clima', 'Señal']], use_container_width=True, hide_index=True)
+
+st_autorefresh(interval=600000, key="simons_30m_refresh")
