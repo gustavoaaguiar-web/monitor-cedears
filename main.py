@@ -29,7 +29,7 @@ def enviar_alerta_mail(asunto, cuerpo):
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
 CAPITAL_INICIAL = 30000000.0
-GANANCIA_PREVIA = 0.0705023 
+GANANCIA_PREVIA = 0.07702713566 
 SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
 
 def load():
