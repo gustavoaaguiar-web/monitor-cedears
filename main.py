@@ -26,67 +26,90 @@ def enviar_alerta_mail(asunto, cuerpo):
     except Exception as e:
         st.error(f"Error enviando mail: {e}")
 
-# --- DATABASE / PERSISTENCIA ---
+# --- DATABASE / PERSISTENCIA MEJORADA ---
 DB = "simons_gg_v01.json"
 CAPITAL_INICIAL = 30000000.0
-GANANCIA_PREVIA = 0.07702713566 
-SALDO_ACTUAL = CAPITAL_INICIAL * (1 + GANANCIA_PREVIA)
+# Ajuste solicitado: 10.365127833% de aumento
+GANANCIA_INICIAL_FIJADA = 0.10365127833 
+SALDO_PARTIDA = CAPITAL_INICIAL * (1 + GANANCIA_INICIAL_FIJADA)
 
 def load():
+    """Carga los datos del archivo. Si no existe, usa el saldo con la ganancia del 10.36%"""
     if os.path.exists(DB):
         try:
-            with open(DB, "r") as f: return json.load(f)
-        except: pass
+            with open(DB, "r") as f:
+                data = json.load(f)
+                # Validación mínima de estructura
+                if "s" in data and "p" in data:
+                    return data
+        except:
+            pass
+    # Si es la primera vez o falla el archivo, iniciamos con el saldo ajustado
     return {
-        "s": SALDO_ACTUAL, 
+        "s": SALDO_PARTIDA, 
         "p": {}, 
-        "h": [{"fecha": datetime.now().strftime("%Y-%m-%d"), "t": SALDO_ACTUAL}]
+        "h": [{"fecha": datetime.now().strftime("%Y-%m-%d %H:%M"), "t": SALDO_PARTIDA}]
     }
 
 def save():
+    """Guarda el estado actual y añade un punto a la evolución histórica"""
     v_a = sum(float(i['m']) for i in st.session_state.pos.values())
     tot = st.session_state.saldo + v_a
-    hoy = datetime.now().strftime("%Y-%m-%d")
-    if not st.session_state.hist or st.session_state.hist[-1]['fecha'] != hoy:
-        st.session_state.hist.append({"fecha": hoy, "t": tot})
-    else: 
-        st.session_state.hist[-1]['t'] = tot
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # Solo agregamos al historial si el valor cambió significativamente o pasó tiempo
+    if not st.session_state.hist or st.session_state.hist[-1]['t'] != tot:
+        st.session_state.hist.append({"fecha": ahora, "t": tot})
+    
     with open(DB, "w") as f:
-        json.dump({"s": st.session_state.saldo, "p": st.session_state.pos, "h": st.session_state.hist}, f)
+        json.dump({
+            "s": st.session_state.saldo, 
+            "p": st.session_state.pos, 
+            "h": st.session_state.hist
+        }, f, indent=4)
 
 # --- UI CONFIG ---
-st.set_page_config(page_title="Simons GG v01 - 30M", layout="wide")
+st.set_page_config(page_title="Simons GG v01 - Persistente", layout="wide")
 
+# Inicialización única
 if 'init' not in st.session_state:
     d = load()
-    st.session_state.update({'saldo': d["s"], 'pos': d["p"], 'hist': d["h"], 'init': True})
+    st.session_state.update({
+        'saldo': d["s"], 
+        'pos': d["p"], 
+        'hist': d["h"], 
+        'init': True
+    })
 
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 pat = st.session_state.saldo + v_i
 
+# --- HEADER ---
 st.title("🦅 Simons GG v01🤑")
 c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.2f}%")
+c1.metric("Patrimonio Total", f"AR$ {pat:,.2f}", f"{((pat/CAPITAL_INICIAL)-1)*100:+.4f}%")
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("Capital de Origen", f"AR$ {CAPITAL_INICIAL:,.2f}")
+c3.metric("Capital Inicial", f"AR$ {CAPITAL_INICIAL:,.2f}")
 
-# --- MARKET DATA & RATIOS (PAMP Agregado) ---
-# Ticker USA : Ratio
+# Gráfico de evolución para monitorear que no se reinicie
+if st.session_state.hist:
+    st.subheader("📈 Evolución de Cartera")
+    df_h = pd.DataFrame(st.session_state.hist)
+    st.line_chart(df_h.set_index('fecha')['t'])
+
+# --- MARKET DATA (Manteniendo tu configuración) ---
 cfg = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10,
-    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25 # PAM es Pampa en USA
+    'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
 
+@st.cache_data(ttl=600) # Cache de 10 min para no saturar yfinance
 def get_data():
     filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            # Lógica especial para tickers que cambian nombre en BA
-            if t == 'YPF': ba_ticker = "YPFD.BA"
-            elif t == 'PAM': ba_ticker = "PAMP.BA" # Pampa local
-            else: ba_ticker = f"{t}.BA"
-
+            ba_ticker = "YPFD.BA" if t == 'YPF' else ("PAMP.BA" if t == 'PAM' else f"{t}.BA")
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
             a = yf.download(ba_ticker, period="2d", interval="1m", progress=False, auto_adjust=True)
             
@@ -102,16 +125,14 @@ def get_data():
                 re = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
                 cl = "🟢" if GaussianHMM(n_components=3, random_state=42).fit(re).predict(re)[-1]==0 else "🔴"
             
-            # Nombre amigable para la tabla
             nombre_mostrar = "PAMP" if t == 'PAM' else t
             filas.append({"Activo": nombre_mostrar, "USD": pu, "ARS": pa, "CCL": ccl, "Clima": cl})
         except: continue
     return pd.DataFrame(filas), np.median(ccls) if ccls else 0
 
-if st.button('🔄 Sincronizar con Bull Market'): st.rerun()
 df, avg_ccl = get_data()
 
-# --- LOGIC & MAIL TRIGGER ---
+# --- LÓGICA DE TRADING ---
 if not df.empty:
     st.metric("📊 CCL Promedio (Benchmark)", f"AR$ {avg_ccl:,.2f}")
     
@@ -127,20 +148,23 @@ if not df.empty:
     
     for _, r in df.iterrows():
         tk = r['Activo']
+        # Lógica de Compra
         if r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= MONTO_OPERACION and tk not in st.session_state.pos:
             st.session_state.saldo -= MONTO_OPERACION
             st.session_state.pos[tk] = {"m": MONTO_OPERACION, "pc": r['ARS']}
             upd = True
-            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició posición en {tk} a AR$ {r['ARS']:,.2f}.\nCapital asignado: {MONTO_OPERACION}")
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició posición en {tk} a AR$ {r['ARS']:,.2f}.")
             
+        # Lógica de Venta
         elif r['Señal'] == "🔴 VENTA" and tk in st.session_state.pos:
             p = st.session_state.pos.pop(tk)
             st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
             upd = True
-            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk} a AR$ {r['ARS']:,.2f}.\nProfit del trade: {((r['ARS']/p['pc'])-1)*100:+.2f}%")
+            enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk}. Profit: {((r['ARS']/p['pc'])-1)*100:+.2f}%")
     
     if upd: save()
 
+    # Visualización de Tablas
     st.subheader("🏢 Cartera Activa")
     if st.session_state.pos:
         pos_list = []
