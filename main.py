@@ -4,8 +4,27 @@ from hmmlearn.hmm import GaussianHMM
 import numpy as np
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
-import json, os, pytz
+import json, os, pytz, smtplib
 from datetime import datetime
+from email.message import EmailMessage
+
+# --- CONFIGURACIÓN DE CORREO ---
+MI_MAIL = "gustavoaaguiar99@gmail.com"
+CLAVE_APP = "zmupyxmxwbjsllsu" 
+
+def enviar_alerta_mail(asunto, cuerpo):
+    msg = EmailMessage()
+    msg.set_content(cuerpo)
+    msg['Subject'] = asunto
+    msg['From'] = MI_MAIL
+    msg['To'] = MI_MAIL
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(MI_MAIL, CLAVE_APP)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        st.error(f"Error enviando mail: {e}")
 
 # --- CONFIGURACIÓN DE TIEMPO (ARGENTINA) ---
 def obtener_estado_mercado():
@@ -13,7 +32,6 @@ def obtener_estado_mercado():
     ahora = datetime.now(tz)
     hora_min = ahora.hour * 100 + ahora.minute
     es_dia_habil = ahora.weekday() <= 4
-    
     esta_abierto = es_dia_habil and (1100 <= hora_min < 1700)
     ventana_cierre = es_dia_habil and (1640 <= hora_min < 1700)
     return esta_abierto, ventana_cierre, ahora
@@ -21,7 +39,6 @@ def obtener_estado_mercado():
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
 CAPITAL_ORIGEN = 30000000.0
-# Rendimiento actual del 10.365127833%
 CAPITAL_PARTIDA = CAPITAL_ORIGEN * 1.10365127833 
 
 def load():
@@ -50,7 +67,7 @@ abierto, en_cierre, ahora_arg = obtener_estado_mercado()
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + v_i
 
-# --- DASHBOARD SUPERIOR ---
+# --- DASHBOARD ---
 st.title("🦅 Simons GG v01🤑")
 c1, c2, c3 = st.columns(3)
 porcentaje_var = ((patrimonio_total / CAPITAL_ORIGEN) - 1) * 100
@@ -58,7 +75,7 @@ c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{porcentaje_var:
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Ticket de Op. (8%)", f"AR$ {(patrimonio_total * 0.08):,.2f}")
 
-# --- MOTOR DE DATOS (CON CLIMA Y SEÑALES SIEMPRE VISIBLES) ---
+# --- MOTOR DE DATOS ---
 cfg = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25}
 
 @st.cache_data(ttl=300)
@@ -70,27 +87,22 @@ def get_market_data():
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
             a = yf.download(ba_tk, period="2d", interval="1m", progress=False, auto_adjust=True)
             if u.empty or a.empty: continue
-            
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
             ccls.append(ccl)
             
-            # Cálculo de Clima (HMM)
             h = yf.download(t, period="3mo", interval="1d", progress=False)
             clima = "⚪"
             if not h.empty and len(h) > 10:
                 rets = np.diff(np.log(h.Close.values.flatten().reshape(-1, 1)), axis=0)
                 clima = "🟢" if GaussianHMM(n_components=3, random_state=42).fit(rets).predict(rets)[-1] == 0 else "🔴"
-            
             filas.append({"Activo": t if t!='PAM' else 'PAMP', "USD": pu, "ARS": pa, "CCL": ccl, "Clima": clima})
         except: continue
     
     if not filas: return pd.DataFrame(), 0
-    
     df_res = pd.DataFrame(filas)
     avg_ccl = np.median(ccls)
     
-    # Agregar columna de Señal basada en la estrategia Simons
     def definir_senial(row):
         if row['CCL'] < avg_ccl * 0.995 and row['Clima'] != "🔴": return "🟢 COMPRA"
         if row['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
@@ -101,32 +113,35 @@ def get_market_data():
 
 df, avg_ccl = get_market_data()
 
-# --- LÓGICA DE OPERACIÓN (BLOQUEADA POR HORARIO) ---
+# --- LÓGICA DE OPERACIÓN Y EMAILS ---
 if abierto and not df.empty:
     upd = False
     MONTO_TICKET = patrimonio_total * 0.08
     
     for _, r in df.iterrows():
         tk = r['Activo']
-        # 1. COMPRAS: Solo fuera de ventana de cierre
+        # COMPRA
         if not en_cierre and r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= MONTO_TICKET and tk not in st.session_state.pos:
             st.session_state.saldo -= MONTO_TICKET
             st.session_state.pos[tk] = {"m": MONTO_TICKET, "pc": r['ARS']}
             upd = True
+            enviar_alerta_mail(f"🟢 COMPRA: {tk}", f"Simons GG inició posición en {tk} a AR$ {r['ARS']:,.2f}.\nTicket: {MONTO_TICKET:,.2f}")
             
-        # 2. VENTAS: Por señal o por ventana de cierre (liquidez)
+        # VENTA
         elif tk in st.session_state.pos:
             if r['Señal'] == "🔴 VENTA" or (en_cierre and r['CCL'] >= avg_ccl):
                 p = st.session_state.pos.pop(tk)
+                rendimiento = ((r['ARS'] / p['pc']) - 1) * 100
                 st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
                 upd = True
+                enviar_alerta_mail(f"🔴 VENTA: {tk}", f"Simons GG cerró {tk} a AR$ {r['ARS']:,.2f}.\nRendimiento: {rendimiento:+.2f}%")
     if upd: save()
 
-# --- INTERFAZ VISUAL ---
+# --- INTERFAZ ---
 if not abierto:
-    st.error(f"🔴 MERCADO CERRADO (Hora Arg: {ahora_arg.strftime('%H:%M')}). No se abrirán nuevas posiciones.")
+    st.error(f"🔴 MERCADO CERRADO (Arg: {ahora_arg.strftime('%H:%M')})")
 elif en_cierre:
-    st.warning("⚠️ VENTANA DE CIERRE (16:40-17:00): Buscando liquidar posiciones.")
+    st.warning("⚠️ VENTANA DE CIERRE (16:40-17:00)")
 
 st.subheader("📊 Monitor de Arbitraje")
 if not df.empty:
@@ -135,19 +150,7 @@ if not df.empty:
 
 st.subheader("🏢 Cartera Activa")
 if st.session_state.pos:
-    pos_data = []
-    for t, p in st.session_state.pos.items():
-        # Obtener precio actual para ver rendimiento en vivo
-        actual = df[df.Activo == t]['ARS'].values[0] if not df.empty and t in df.Activo.values else p['pc']
-        pos_data.append({
-            "Activo": t,
-            "Monto Invertido": f"AR$ {p['m']:,.0f}",
-            "P. Compra": f"{p['pc']:,.2f}",
-            "Rendimiento": f"{((actual/p['pc'])-1)*100:+.2f}%"
-        })
-    st.table(pd.DataFrame(pos_data))
-else:
-    st.info("Sin posiciones abiertas.")
+    st.table(pd.DataFrame([{"Activo":t, "Inversión":f"${p['m']:,.0f}", "Entrada":f"${p['pc']:,.2f}"} for t, p in st.session_state.pos.items()]))
 
 if st.session_state.hist:
     st.subheader("📈 Curva de Equidad")
