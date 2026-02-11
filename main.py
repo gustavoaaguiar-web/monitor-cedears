@@ -13,6 +13,7 @@ def obtener_estado_mercado():
     ahora = datetime.now(tz)
     hora_min = ahora.hour * 100 + ahora.minute
     es_dia_habil = ahora.weekday() <= 4
+    
     esta_abierto = es_dia_habil and (1100 <= hora_min < 1700)
     ventana_cierre = es_dia_habil and (1640 <= hora_min < 1700)
     return esta_abierto, ventana_cierre, ahora
@@ -20,6 +21,7 @@ def obtener_estado_mercado():
 # --- DATABASE / PERSISTENCIA ---
 DB = "simons_gg_v01.json"
 CAPITAL_ORIGEN = 30000000.0
+# Rendimiento actual del 10.365127833%
 CAPITAL_PARTIDA = CAPITAL_ORIGEN * 1.10365127833 
 
 def load():
@@ -48,7 +50,7 @@ abierto, en_cierre, ahora_arg = obtener_estado_mercado()
 v_i = sum(float(i['m']) for i in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + v_i
 
-# --- DASHBOARD ---
+# --- DASHBOARD SUPERIOR ---
 st.title("🦅 Simons GG v01🤑")
 c1, c2, c3 = st.columns(3)
 porcentaje_var = ((patrimonio_total / CAPITAL_ORIGEN) - 1) * 100
@@ -56,7 +58,7 @@ c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{porcentaje_var:
 c2.metric("Efectivo en Cuenta", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Ticket de Op. (8%)", f"AR$ {(patrimonio_total * 0.08):,.2f}")
 
-# --- DATA ENGINE (CON CLIMA Y SEÑAL) ---
+# --- MOTOR DE DATOS (CON CLIMA Y SEÑALES SIEMPRE VISIBLES) ---
 cfg = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25}
 
 @st.cache_data(ttl=300)
@@ -68,6 +70,7 @@ def get_market_data():
             u = yf.download(t, period="2d", interval="1m", progress=False, auto_adjust=True)
             a = yf.download(ba_tk, period="2d", interval="1m", progress=False, auto_adjust=True)
             if u.empty or a.empty: continue
+            
             pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
             ccl = (pa * r) / pu
             ccls.append(ccl)
@@ -81,40 +84,50 @@ def get_market_data():
             
             filas.append({"Activo": t if t!='PAM' else 'PAMP', "USD": pu, "ARS": pa, "CCL": ccl, "Clima": clima})
         except: continue
-    return pd.DataFrame(filas), np.median(ccls) if ccls else 0
-
-df, avg_ccl = get_market_data()
-
-# --- LÓGICA DE OPERACIÓN ---
-if not df.empty:
-    # Definir señales
+    
+    if not filas: return pd.DataFrame(), 0
+    
+    df_res = pd.DataFrame(filas)
+    avg_ccl = np.median(ccls)
+    
+    # Agregar columna de Señal basada en la estrategia Simons
     def definir_senial(row):
         if row['CCL'] < avg_ccl * 0.995 and row['Clima'] != "🔴": return "🟢 COMPRA"
         if row['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
         return "⚖️ MANTENER"
     
-    df['Señal'] = df.apply(definir_senial, axis=1)
-    
-    # Ejecutar trades solo si el mercado está abierto
-    if abierto:
-        upd = False
-        MONTO_TICKET = patrimonio_total * 0.08
-        for _, r in df.iterrows():
-            tk = r['Activo']
-            # Compras (Evitar en ventana de cierre)
-            if not en_cierre and r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= MONTO_TICKET and tk not in st.session_state.pos:
-                st.session_state.saldo -= MONTO_TICKET
-                st.session_state.pos[tk] = {"m": MONTO_TICKET, "pc": r['ARS']}
-                upd = True
-            # Ventas (Por estrategia o cierre de mercado)
-            elif tk in st.session_state.pos:
-                if r['Señal'] == "🔴 VENTA" or (en_cierre and r['CCL'] >= avg_ccl):
-                    p = st.session_state.pos.pop(tk)
-                    st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
-                    upd = True
-        if upd: save()
+    df_res['Señal'] = df_res.apply(definir_senial, axis=1)
+    return df_res, avg_ccl
 
-# --- TABLAS VISIBLES ---
+df, avg_ccl = get_market_data()
+
+# --- LÓGICA DE OPERACIÓN (BLOQUEADA POR HORARIO) ---
+if abierto and not df.empty:
+    upd = False
+    MONTO_TICKET = patrimonio_total * 0.08
+    
+    for _, r in df.iterrows():
+        tk = r['Activo']
+        # 1. COMPRAS: Solo fuera de ventana de cierre
+        if not en_cierre and r['Señal'] == "🟢 COMPRA" and st.session_state.saldo >= MONTO_TICKET and tk not in st.session_state.pos:
+            st.session_state.saldo -= MONTO_TICKET
+            st.session_state.pos[tk] = {"m": MONTO_TICKET, "pc": r['ARS']}
+            upd = True
+            
+        # 2. VENTAS: Por señal o por ventana de cierre (liquidez)
+        elif tk in st.session_state.pos:
+            if r['Señal'] == "🔴 VENTA" or (en_cierre and r['CCL'] >= avg_ccl):
+                p = st.session_state.pos.pop(tk)
+                st.session_state.saldo += p['m'] * (r['ARS'] / p['pc'])
+                upd = True
+    if upd: save()
+
+# --- INTERFAZ VISUAL ---
+if not abierto:
+    st.error(f"🔴 MERCADO CERRADO (Hora Arg: {ahora_arg.strftime('%H:%M')}). No se abrirán nuevas posiciones.")
+elif en_cierre:
+    st.warning("⚠️ VENTANA DE CIERRE (16:40-17:00): Buscando liquidar posiciones.")
+
 st.subheader("📊 Monitor de Arbitraje")
 if not df.empty:
     st.metric("CCL Promedio", f"AR$ {avg_ccl:,.2f}")
@@ -122,6 +135,22 @@ if not df.empty:
 
 st.subheader("🏢 Cartera Activa")
 if st.session_state.pos:
-    st.table(pd.DataFrame([{"Activo":t, "Monto":f"${p['m']:,.0f}", "Entrada":f"${p['pc']:,.2f}"} for t, p in st.session_state.pos.items()]))
+    pos_data = []
+    for t, p in st.session_state.pos.items():
+        # Obtener precio actual para ver rendimiento en vivo
+        actual = df[df.Activo == t]['ARS'].values[0] if not df.empty and t in df.Activo.values else p['pc']
+        pos_data.append({
+            "Activo": t,
+            "Monto Invertido": f"AR$ {p['m']:,.0f}",
+            "P. Compra": f"{p['pc']:,.2f}",
+            "Rendimiento": f"{((actual/p['pc'])-1)*100:+.2f}%"
+        })
+    st.table(pd.DataFrame(pos_data))
+else:
+    st.info("Sin posiciones abiertas.")
+
+if st.session_state.hist:
+    st.subheader("📈 Curva de Equidad")
+    st.line_chart(pd.DataFrame(st.session_state.hist).set_index('fecha')['t'])
 
 st_autorefresh(interval=600000 if abierto else 3600000, key="simons_refresh")
