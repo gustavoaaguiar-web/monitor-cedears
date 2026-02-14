@@ -4,4 +4,4 @@ hmmlearn
 numpy
 pandas
 streamlit-autorefresh
-streamlit-gsheets
+st-gsheets-connection
