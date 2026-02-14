@@ -35,7 +35,7 @@ if 'saldo' not in st.session_state:
     st.session_state.update({'saldo': s, 'pos': p, 'hist': h})
 
 # --- INTERFAZ DE PATRIMONIO ---
-st.title("🦅 Simons GG - Trading OS")
+st.title("🦅 Simons GG v3.0 🤑")
 
 patrimonio_total = st.session_state.saldo + sum(float(i.get('m', 0)) for i in st.session_state.pos.values())
 rendimiento_h = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
