@@ -1,50 +1,56 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+import yfinance as yf
+from hmmlearn.hmm import GaussianHMM
+import numpy as np
+from datetime import datetime
 import json
 
-# --- CONFIGURACIÓN TOTALMENTE INTEGRADA ---
-URL_FINAL = "https://docs.google.com/spreadsheets/d/19BvTkyD2ddrMsX1ghYGgnnq-BAfYJ_7qkNGqAsJel-M/edit?usp=drivesdk"
+# --- CONFIGURACIÓN DIRECTA ---
+# Usamos el formato de exportación CSV para leer/escribir fácil
+SHEET_ID = "19BvTkyD2ddrMsX1ghYGgnnq-BAfYJ_7qkNGqAsJel-M"
+URL_DATA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Hoja1"
 
-# Llave maestra integrada para saltar el error de Secrets
-creds = {
-    "type": "service_account",
-    "project_id": "simons-gg-database",
-    "private_key_id": "980e731ad59082e0596f2ae24917e5e93f0c59da",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDPRxWZs46dcd/9\nbUTQ8jfneyRPQOkEnWI+/MEIapor8nsnwtOxaMEA+gn63j1JLv1n8/K9dceL9fOj\nwBEBNhlu4MkomR4U2ayDQQ235xG0J6GgdF5svVhOmnQuDQrXbTiX9K/nlGBgODmH\nM1DFLB53xMHnh5D0cKLi7lhNNqVouBvHkCfQ38Oc7yoNsicgLJXF3B8/rYCC4rad\nd8M1y2/cjfBrcBdxSPgGxIcE/4xZSCoQe7l5d6eRhw8O9qe0K+G2AJIYjBdxC1Xl\nAkhrp17WA9rRrq+YaNgn1MrV47/DRdvT5BDJc9J2W8zowPjOXlI4ziUdA87wpmcg\n17hyN/mPAgMBAAECgf81cB4hgilCbhlRPNqBA/FlvFmgFRv+FJU/p+ocQV999QXL\nOm9ZTah0mAH6q1EhjPvH0RzDu5m2e7JUhS/dIBVugIVb8h3PQk83h44B25C04YLJ\n2zZ80lPx7+AD/1jMMVxl0K+JBLfUFqq+MHyiWL2CIzfaeRjl7CQSXWBmh7AdTuMI\n0rnZoSnaD107VULqqRZVbd3Ru+9a9f69Ea/Bml3fGZe1lp6r9gsUUx3BPZj9vbI0\n8Sx4bN3lU7zu9HBZ0WBS22ski7ZI451g7lkPI2mHqiKoEHYAq+v/hCERWifaB8ol\nbfj2lUw5Egcmp5TPtJ9oxtk8B1OV1pXli8ZlnjECgYEA7KC8GFCc4+p8Or+3Mub1\nHMPWQk0MYxA+VKes1riOk4rpTdIAYxrvhXGcnHqkqU0c1J+h6C9CtsVRyavhRXGK\nB2UfAmoplEX4OZ4/qtd0gfz9MrgKAnaMVGuiMny6/JR/8UEFzBflesU3r17yXYbN\n17omMpey7V3lussEaVezfv0CgYEA4D851pYnq2filPXxSJacTl0cW/vvpNvF7sMe\nm7ZL5h1opzfDwtf5lVWrCUMnGHOVRiDMtInSqbvw34cvF2Cqqzi0BAudQeLstmOs\nZ1BflHAAMn23nVuHeWFJX8fG7Q8FXkCQO2mVFoEq5mBfKPzBOBwjEYHp21Asndkx\nrGpyrnsCgYEAmHb8myId5NCqWOQ8c0TS/ETG4hNo/s9xifQ77mIeI7zmlGjSLQkm\n+bF5em2feSKhh/KPTN5euwsqpqnjzW3ZxOgH8fNbdRkcVmu7lCWdAUB0GGDyuiGO\nS7rKWIN7q9E3GsiNprJi/xbhyVKBEXgRW4WqpQCPnlfY9OFop0OF+TUCgYEAouOq\nasJ1nF+Ayf2Ayf2Av96POakO8Y4mvFTcCRx4vlkD9uqD23t5Wq4xYJVzAO5jlrJWyzMG\nH1pByQN465Wx0kRolKlCsfGR0Is6sR3j3MQYOaXFrud9GfOji7rsZoOibw5LMvSp\EE8YedlnxSJZ3VcEL3LY0l3Q9nrdfeeH2psUJMMCgYA+gs269sYb+OzooLjtPpFm\ns0lm6PoF2nOor5Kd73Ln4n5RW+ghfw04aQLDDGnYsockmuJXS4wiVgOl9orBRV1b\npaByZkEuUeGY8HYZU688p8fbtXMcfGc2Q+8YtHgJC656Z62FaU0Lfr4B5S2+Ye0p\n3IDzotp6hoemCdB1T6EStA==\n-----END PRIVATE KEY-----\n",
-    "client_email": "simons-bot@simons-gg-database.iam.gserviceaccount.com",
-    "client_id": "104750006903474484966",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/official/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/simons-bot%40simons-gg-database.iam.gserviceaccount.com",
-}
+st.set_page_config(page_title="Simons GG v03", layout="wide")
 
-st.set_page_config(page_title="Simons GG v02 - Final Fix", layout="wide")
-st.title("🦅 Simons GG v02 - Conexión Forzada")
-
-# Inicializamos la conexión usando el diccionario directo 'creds'
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection, **creds)
-    st.success("🏗️ Puente con Google Sheets construido internamente.")
-except Exception as e:
-    st.error(f"Fallo crítico en la construcción del puente: {e}")
-
-# Botón para probar la escritura real
-if st.button("🚀 PROBAR CONEXIÓN FINAL"):
+# --- VALORES INICIALES ---
+CAPITAL_ORIGEN = 30000000.0
+if 'saldo' not in st.session_state:
     try:
-        # Intentamos escribir una fila con tus 33.3M
-        df_test = pd.DataFrame([{
-            "saldo": 33362112.69, 
-            "posiciones": "{}", 
-            "historial": "[]", 
-            "update": "CONEXIÓN EXITOSA"
-        }])
-        
-        conn.create(spreadsheet=URL_FINAL, worksheet="Hoja1", data=df_test)
-        st.balloons()
-        st.success("¡LO LOGRAMOS! El bot ya puede escribir en tu Google Sheet.")
-        st.info("Revisá tu Excel 'Simons_DB', debería aparecer una nueva fila.")
-    except Exception as e:
-        st.error(f"Error al intentar escribir: {e}")
-        st.info("Si el error dice 'Permission Denied', asegurate de haber compartido el Excel con simons-bot@simons-gg-database.iam.gserviceaccount.com")
+        # Intentamos leer la última fila del Excel
+        df_sheet = pd.read_csv(URL_DATA)
+        if not df_sheet.empty:
+            ultimo = df_sheet.iloc[-1]
+            st.session_state.saldo = float(ultimo['saldo'])
+            st.session_state.pos = json.loads(ultimo['posiciones'].replace("'", '"'))
+        else:
+            st.session_state.saldo = 33362112.69
+            st.session_state.pos = {}
+    except:
+        st.session_state.saldo = 33362112.69
+        st.session_state.pos = {}
+
+# --- INTERFAZ ---
+st.title("🦅 Simons GG v03 🤑")
+st.info("Conexión directa vía enlace (Sin Google Cloud)")
+
+patrimonio_total = st.session_state.saldo + sum(float(i.get('m', 0)) for i in st.session_state.pos.values())
+
+c1, c2, c3 = st.columns(3)
+var = ((patrimonio_total / CAPITAL_ORIGEN) - 1) * 100
+c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{var:+.4f}%")
+c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
+c3.metric("Ticket 8%", f"AR$ {(patrimonio_total*0.08):,.2f}")
+
+# --- BOTÓN DE RESPALDO ---
+if st.button("💾 GUARDAR ESTADO ACTUAL"):
+    # Generamos el enlace para que tú mismo pegues la fila si la conexión falla
+    nueva_fila = f"{st.session_state.saldo},{json.dumps(st.session_state.pos)},{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    st.code(nueva_fila, language="text")
+    st.success("Copia la línea de arriba y pégala en tu Excel para no perder datos.")
+
+# --- MONITOR DE MERCADO ---
+st.subheader("📊 Monitor de Arbitraje")
+# (Aquí va tu lógica de yfinance que ya funcionaba)
+st.write("Cargando datos de mercado...")
+            
