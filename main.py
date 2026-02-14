@@ -5,37 +5,21 @@ from hmmlearn.hmm import GaussianHMM
 import numpy as np
 from datetime import datetime
 import json
+from streamlit_autorefresh import st_autorefresh
 
-# --- CONFIGURACIÓN DIRECTA (SIN GOOGLE CLOUD) ---
+# --- CONFIGURACIÓN ---
 SHEET_ID = "19BvTkyD2ddrMsX1ghYGgnnq-BAfYJ_7qkNGqAsJel-M"
-# URL para leer el Excel como si fuera una web
 URL_DATA = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Hoja1"
 
-st.set_page_config(page_title="Simons GG v03", layout="wide")
+st.set_page_config(page_title="Simons GG v04", layout="wide")
 
-# --- INICIALIZACIÓN DE SALDO ---
+# --- RECUPERACIÓN DE DATOS ---
 if 'saldo' not in st.session_state:
-    try:
-        # Intentamos leer la última fila del Excel directamente
-        df_sheet = pd.read_csv(URL_DATA)
-        if not df_sheet.empty:
-            u = df_sheet.iloc[-1]
-            st.session_state.saldo = float(u['saldo'])
-            # Limpiamos el texto de posiciones para que Python lo entienda
-            pos_text = str(u['posiciones']).replace("'", '"')
-            st.session_state.pos = json.loads(pos_text)
-        else:
-            st.session_state.saldo = 33362112.69
-            st.session_state.pos = {}
-    except:
-        # Si falla la conexión, cargamos tus datos reales por defecto
-        st.session_state.saldo = 33362112.69
-        st.session_state.pos = {}
+    st.session_state.saldo = 33362112.69
+    st.session_state.pos = {}
 
-# --- INTERFAZ ---
-st.title("🦅 Simons GG v03 🤑")
-st.caption("Conexión Directa (Independiente de Google Cloud)")
-
+# --- DASHBOARD ---
+st.title("🦅 Simons GG v04 🤑")
 valor_cartera = sum(float(i.get('m', 0)) for i in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + valor_cartera
 
@@ -45,30 +29,56 @@ c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{var:+.4f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Ticket 8%", f"AR$ {(patrimonio_total*0.08):,.2f}")
 
-# --- MONITOR DE MERCADO (SIMPLIFICADO PARA PROBAR) ---
-st.subheader("📊 Monitor de Arbitraje")
+# --- BOTÓN DE BACKUP (Indispensable ahora que Google borró el proyecto) ---
+with st.expander("💾 Guardar Cambios en Excel"):
+    st.write("Copia esta línea y pégala al final de tu Google Sheet:")
+    linea_excel = f"{st.session_state.saldo}, '{json.dumps(st.session_state.pos)}', {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    st.code(linea_excel, language="text")
 
-cfg = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1}
+# --- MONITOR DE MERCADO COMPLETO ---
+st.subheader("📊 Monitor de Arbitraje y Clima HMM")
 
-@st.cache_data(ttl=300)
-def get_data():
-    filas = []
+cfg = {
+    'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
+    'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 
+    'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
+}
+
+@st.cache_data(ttl=600)
+def get_full_data():
+    filas, ccls = [], []
     for t, r in cfg.items():
         try:
-            ba = "YPFD.BA" if t=='YPF' else f"{t}.BA"
-            u = yf.download(t, period="1d", interval="1m", progress=False)
+            ba = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
+            # Datos históricos para Clima
+            u_hist = yf.download(t, period="3mo", interval="1d", progress=False)
+            # Datos actuales
             a = yf.download(ba, period="1d", interval="1m", progress=False)
-            pu, pa = float(u.Close.iloc[-1]), float(a.Close.iloc[-1])
-            ccl = (pa * r) / pu
-            filas.append({"Activo": t, "USD": pu, "ARS": pa, "CCL": ccl})
-        except: continue
-    return pd.DataFrame(filas)
-
-df_mercado = get_data()
-if not df_mercado.empty:
-    st.dataframe(df_mercado, use_container_width=True, hide_index=True)
-else:
-    st.warning("Esperando datos de Yahoo Finance...")
-
-st.info("💡 El lunes a las 11:00 AM el bot retomará la operatoria automática.")
             
+            pu = float(u_hist.Close.iloc[-1])
+            pa = float(a.Close.iloc[-1])
+            ccl = (pa * r) / pu
+            ccls.append(ccl)
+            
+            # Modelo HMM para Clima
+            returns = np.diff(np.log(u_hist.Close.values.flatten().reshape(-1, 1)), axis=0)
+            model = GaussianHMM(n_components=3, random_state=42).fit(returns)
+            clima = "🟢" if model.predict(returns)[-1] == 0 else "🔴"
+            
+            filas.append({"Activo": t, "USD": round(pu,2), "ARS": round(pa,2), "CCL": round(ccl,2), "Clima": clima})
+        except: continue
+    
+    df = pd.DataFrame(filas)
+    if not df.empty:
+        avg_ccl = np.median(ccls)
+        def set_signal(row):
+            if row['CCL'] < avg_ccl * 0.995 and row['Clima'] == "🟢": return "🟢 COMPRA"
+            if row['CCL'] > avg_ccl * 1.005: return "🔴 VENTA"
+            return "⚖️ MANTENER"
+        df['Señal'] = df.apply(set_signal, axis=1)
+    return df
+
+df_final = get_full_data()
+st.dataframe(df_final, use_container_width=True, hide_index=True)
+
+st_autorefresh(interval=600000, key="v4_ref")
